@@ -169,7 +169,7 @@ function App() {
     }
   }
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); const timer = setInterval(load, 30000); return () => clearInterval(timer); }, []);
 
   const consultants = useMemo(() => ["all", ...new Set(events.map(e => normalizeConsultant(e.consultant)))], [events]);
 
@@ -183,6 +183,7 @@ function App() {
     const searches = filtered.filter(e => e.event === "search").length;
     const noResult = filtered.filter(e => e.event === "sem_resultado").length;
     const views = filtered.filter(e => e.event === "view_product").length;
+    const favorites = filtered.filter(e => e.event === "favorite").length;
     const carts = filtered.filter(e => e.event === "add_to_cart").length;
     const whats = filtered.filter(e => e.event === "whatsapp_checkout").length;
     const revenue = filtered.filter(e => e.event === "whatsapp_checkout").reduce((sum,e) => sum + (e.total || e.price * (e.quantity || 1)), 0);
@@ -190,6 +191,7 @@ function App() {
       searches,
       noResult,
       views,
+      favorites,
       carts,
       whats,
       revenue,
@@ -218,15 +220,36 @@ function App() {
   const topProduct = productRank[0];
   const topMissing = noResultRank[0];
 
+  function exportCsv() {
+    const header = ["createdAt","event","consultant","query","productCode","productName","brand","price","quantity","total"];
+    const rows = filtered.map(e => header.map(key => `"${String(e[key] ?? "").replace(/"/g, '""')}"`).join(";"));
+    const csv = [header.join(";"), ...rows].join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `zconnect-analytics-v7-${period}-${consultant}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const funnel = [
+    ["Busca", kpis.searches],
+    ["Visualização", kpis.views],
+    ["Favorito", kpis.favorites],
+    ["Carrinho", kpis.carts],
+    ["WhatsApp", kpis.whats]
+  ];
+
   return (
     <main className="app">
       <section className="hero">
         <div>
-          <span className="eyebrow">Z Connect BI</span>
+          <span className="eyebrow">Z Connect BI • Sprint V7</span>
           <h1>Analytics Comercial</h1>
           <p>Pedidos WhatsApp, buscas, produtos e oportunidades comerciais em tempo real.</p>
         </div>
-        <button onClick={load} className="refresh"><RefreshCw size={18}/> Atualizar</button>
+        <div className="hero-actions"><button onClick={load} className="refresh"><RefreshCw size={18}/> Atualizar</button><button onClick={exportCsv} className="refresh"><Download size={18}/> Exportar CSV</button></div>
       </section>
 
       <section className="toolbar">
@@ -249,6 +272,7 @@ function App() {
       <section className="kpi-grid">
         <Kpi icon={<Search/>} label="Buscas" value={kpis.searches}/>
         <Kpi icon={<Eye/>} label="Produtos vistos" value={kpis.views}/>
+        <Kpi icon={<Users/>} label="Favoritos" value={kpis.favorites}/>
         <Kpi icon={<ShoppingCart/>} label="Adicionados" value={kpis.carts}/>
         <Kpi icon={<Send/>} label="WhatsApp" value={kpis.whats}/>
         <Kpi icon={<TrendingUp/>} label="Conversão busca → WhatsApp" value={percent(kpis.conversion)}/>
@@ -266,6 +290,19 @@ function App() {
         <Rank title="Produtos mais enviados" rows={productRank} empty="Sem produtos enviados"/>
         <Rank title="Buscas mais feitas" rows={searchRank} empty="Sem buscas"/>
         <Rank title="Sem resultado" rows={noResultRank} empty="Sem buscas vazias"/>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2><TrendingUp size={20}/> Funil comercial</h2>
+          <span>Busca → Visualização → Favorito → Carrinho → WhatsApp</span>
+        </div>
+        <div className="heat">
+          {funnel.map(([label, value], idx) => {
+            const max = Math.max(1, funnel[0][1]);
+            return <div key={label} className="bar-row"><span>{label}</span><div><i style={{width:`${Math.max(4, Math.min(100, (value / max) * 100))}%`}}/></div><b>{value}</b></div>;
+          })}
+        </div>
       </section>
 
       <section className="panel">

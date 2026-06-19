@@ -1,0 +1,15 @@
+{
+  "project": "Z Connect",
+  "version": "7.1.0",
+  "release": "Sprint V7.1 DevOps",
+  "build": "2026-06-19-1710",
+  "environment": "production",
+  "notes": [
+    "Publicacao em 1 clique",
+    "Commit automatico com timestamp",
+    "Push automatico usando branch atual",
+    "Backup local",
+    "Scripts raiz para duplo clique"
+  ],
+  "module": "Analytics"
+}

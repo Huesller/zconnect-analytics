@@ -6,3 +6,10 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+# Z Connect DevKit
+node_modules/
+dist/
+.vercel/
+*.log
+.env.local
+.DS_Store

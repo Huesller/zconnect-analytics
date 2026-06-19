@@ -55,3 +55,5 @@ select{background:#071326;color:#fff;border:1px solid var(--line);border-radius:
 .bar-row b{color:#fff;text-align:right}
 @media (max-width:1050px){.kpi-grid{grid-template-columns:repeat(3,1fr)}.columns{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:720px){.hero{align-items:flex-start;flex-direction:column}.kpi-grid,.spotlight-grid,.columns{grid-template-columns:1fr}h1{font-size:34px}.app{padding:16px 12px 36px}}
+
+.hero-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
