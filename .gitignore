@@ -1,6 +1,8 @@
-node_modules
-dist
-.vscode
-.vercel
+node_modules/
+dist/
+.vercel/
 .env
-.env.local
+.env.*
+*.log
+.DS_Store
+Thumbs.db

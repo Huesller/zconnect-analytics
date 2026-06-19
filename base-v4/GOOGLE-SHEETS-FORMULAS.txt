@@ -1,4 +1,0 @@
-Resumo:
-=COUNTA(EVENTS!A:A)-1
-Top consultores:
-=QUERY(EVENTS!A:L,"select C,count(C) where C<>'' group by C order by count(C) desc",1)

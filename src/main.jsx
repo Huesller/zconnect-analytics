@@ -26,10 +26,10 @@ const SAMPLE_EVENTS = [
   ["2026-06-19T08:12:00.000Z","add_to_cart","ney","","503450","Grade Gol G5/G6","RETOV","189.9","2","","",""],
   ["2026-06-19T08:13:00.000Z","whatsapp_checkout","ney","","503450","Grade Gol G5/G6","RETOV","189.9","2","379.8","",""],
   ["2026-06-19T09:22:00.000Z","search","huesller","farol polo","","","","","","","",""],
-  ["2026-06-19T09:24:00.000Z","search_no_result","huesller","parachoque nivus","","","","","","","",""],
+  ["2026-06-19T09:24:00.000Z","sem_resultado","huesller","parachoque nivus","","","","","","","",""],
   ["2026-06-19T10:00:00.000Z","whatsapp_checkout","francisco","","567890","Farol Principal","TYC","420","1","420","",""],
   ["2026-06-19T10:30:00.000Z","search","representante","grade compass","","","","","","","",""],
-  ["2026-06-19T11:12:00.000Z","search_no_result","representante","farol hb20 2024","","","","","","","",""],
+  ["2026-06-19T11:12:00.000Z","sem_resultado","representante","farol hb20 2024","","","","","","","",""],
 ].map((r, idx) => ({
   id: `sample-${idx}`,
   createdAt: r[0],
@@ -93,7 +93,7 @@ function parseEvents(payload) {
 }
 
 async function fetchEvents() {
-  const url = `${SCRIPT_URL}?mode=events&cache=${Date.now()}`;
+  const url = `${SCRIPT_URL}?action=events&cache=${Date.now()}`;
   const response = await fetch(url, { method: "GET" });
   if (!response.ok) throw new Error("Não foi possível carregar os eventos.");
   const text = await response.text();
@@ -181,7 +181,7 @@ function App() {
 
   const kpis = useMemo(() => {
     const searches = filtered.filter(e => e.event === "search").length;
-    const noResult = filtered.filter(e => e.event === "search_no_result").length;
+    const noResult = filtered.filter(e => e.event === "sem_resultado").length;
     const views = filtered.filter(e => e.event === "view_product").length;
     const carts = filtered.filter(e => e.event === "add_to_cart").length;
     const whats = filtered.filter(e => e.event === "whatsapp_checkout").length;
@@ -202,7 +202,7 @@ function App() {
   const consultantRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => normalizeConsultant(e.consultant)), [filtered]);
   const productRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => [e.productCode, e.productName].filter(Boolean).join(" - ")), [filtered]);
   const searchRank = useMemo(() => countBy(filtered.filter(e => e.event === "search"), e => e.query?.toLowerCase().trim()), [filtered]);
-  const noResultRank = useMemo(() => countBy(filtered.filter(e => e.event === "search_no_result"), e => e.query?.toLowerCase().trim()), [filtered]);
+  const noResultRank = useMemo(() => countBy(filtered.filter(e => e.event === "sem_resultado"), e => e.query?.toLowerCase().trim()), [filtered]);
   const brandRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => e.brand), [filtered]);
 
   const hourly = useMemo(() => {
