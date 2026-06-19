@@ -1,0 +1,1 @@
+Sprint 4.1 CSS overrides adicionados para UX compacta.

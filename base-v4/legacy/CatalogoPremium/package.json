@@ -1,0 +1,19 @@
+{
+  "name": "scraper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "scraper.js",
+  "scripts": {
+    "scrape": "node scraper.js",
+    "test": "node --check scraper.js && node --check scraper/extract.js && node --check scraper/pagination.js && node --check ui/generate-html.js && node --check ui/catalog.js && node --check cart/cart.js",
+    "estoque": "node scraper.js --stock-only",
+    "stock": "node scraper.js --stock-only"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}

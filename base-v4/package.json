@@ -1,0 +1,25 @@
+{
+  "name": "zconnect-v4",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "setup": "npm install && npm --prefix legacy/CatalogoPremium install",
+    "dev": "node node_modules/vite/bin/vite.js",
+    "build": "node node_modules/vite/bin/vite.js build",
+    "update-catalog": "node scripts/generate-catalog.mjs",
+    "update-fast": "node scripts/generate-catalog.mjs",
+    "rebuild-catalog": "npm --prefix legacy/CatalogoPremium run scrape && npm run update-catalog",
+    "scrape": "npm run rebuild-catalog",
+    "estoque": "npm run update-daily",
+    "stock": "npm run update-daily",
+    "update-daily": "npm --prefix legacy/CatalogoPremium run estoque && npm run update-catalog"
+  },
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0",
+    "@vitejs/plugin-react": "^4.3.0"
+  }
+}

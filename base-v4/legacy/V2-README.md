@@ -1,0 +1,1 @@
+Hero limpo; relacionados maiores; botão reduzido
