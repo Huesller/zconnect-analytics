@@ -17,7 +17,7 @@ Todos os eventos do contrato passam a considerar `companyName`, `consultant`, `e
 - `clear_cart`: carrinho limpo com `itemsCount` e `cartTotal`.
 - `whatsapp_quote`: cotacao/orcamento/negociacao via WhatsApp, com `itemsCount`, `cartTotal` e `products`.
 
-Importante: `whatsapp_quote` nao e venda. O dashboard trata como cotacao WhatsApp.
+Importante: `whatsapp_quote` representa cotacao WhatsApp no dashboard.
 
 ## Arquivos alterados
 
@@ -93,7 +93,7 @@ Regras implementadas:
 - limpa todos os eventos salvos no Apps Script via acao `clear_events`
 - atualiza o dashboard imediatamente apos limpar
 - se `VITE_ANALYTICS_ADMIN_PIN` existir, exige o PIN no painel antes de chamar o reset
-- se nao houver PIN configurado, o botao fica liberado somente em ambiente local/dev
+- se nao houver PIN configurado no painel, o botao fica liberado temporariamente para apresentacao
 
 Observacao operacional: para protecao tambem no Apps Script, configurar a Script Property `ANALYTICS_ADMIN_PIN` com o mesmo valor de `VITE_ANALYTICS_ADMIN_PIN`.
 

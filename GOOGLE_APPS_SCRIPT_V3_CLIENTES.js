@@ -235,10 +235,14 @@ function clearEvents_(data) {
   }
 
   const sheet = getEventsSheet_();
-  sheet.clearContents();
-  sheet.appendRow(EVENT_HEADERS);
+  const lastRow = sheet.getLastRow();
+  const rowsToDelete = Math.max(0, lastRow - 1);
 
-  return { ok: true, cleared: true };
+  if (rowsToDelete > 0) {
+    sheet.deleteRows(2, rowsToDelete);
+  }
+
+  return { ok: true, cleared: true, clearedRows: rowsToDelete };
 }
 
 function doPost(e) {

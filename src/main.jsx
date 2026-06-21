@@ -26,6 +26,10 @@ const ANALYTICS_API_URL =
   "https://script.google.com/macros/s/AKfycbxcISxjVLPj5mBz0oem-5FrDjL0fOf2NtX6Ry5prry2AIWce5Tsn2NwRinB2tQKMs0T/exec";
 
 const ADMIN_PIN = String(import.meta.env.VITE_ANALYTICS_ADMIN_PIN || "").trim();
+const EMPTY_PERIOD_MESSAGE = "Nenhum evento registrado no período.";
+const EMPTY_LIST_MESSAGE = "Sem dados no período.";
+const RESET_SUCCESS_MESSAGE = "Dados de teste limpos com sucesso";
+const RESET_ERROR_MESSAGE = "Erro ao limpar dados. Verifique Apps Script/PIN";
 
 const EVENT_ALIASES = {
   view_product: "product_open",
@@ -233,6 +237,10 @@ async function fetchEvents() {
 
 async function clearEvents(pin) {
   const body = JSON.stringify({ action: "clear_events", pin });
+  const readResetError = (data, fallback) => {
+    if (data?.error === "invalid_pin") return "PIN inválido.";
+    return data?.error || fallback || "Falha ao limpar eventos.";
+  };
 
   try {
     const response = await fetch(ANALYTICS_API_URL, {
@@ -241,13 +249,13 @@ async function clearEvents(pin) {
       body
     });
     const data = await response.json();
-    if (!data.ok) throw new Error(data.error || "Falha ao limpar eventos.");
+    if (!data.ok) throw new Error(readResetError(data));
     return data;
   } catch (error) {
     const fallbackUrl = `${ANALYTICS_API_URL}?action=clear_events&pin=${encodeURIComponent(pin || "")}&cache=${Date.now()}`;
     const response = await fetch(fallbackUrl, { method: "GET" });
     const data = await response.json();
-    if (!data.ok) throw new Error(data.error || error.message || "Falha ao limpar eventos.");
+    if (!data.ok) throw new Error(readResetError(data, error.message));
     return data;
   }
 }
@@ -286,6 +294,15 @@ function dateTime(value) {
     day: "2-digit",
     month: "2-digit",
     year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function timeOnly(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "--:--";
+  return d.toLocaleTimeString("pt-BR", {
     hour: "2-digit",
     minute: "2-digit"
   });
@@ -369,12 +386,6 @@ function productRank(events, options = {}) {
   });
 
   return [...map.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-function localResetAllowed() {
-  if (ADMIN_PIN) return true;
-  const host = window.location.hostname;
-  return import.meta.env.DEV || host === "localhost" || host === "127.0.0.1" || host === "";
 }
 
 function sortEventsDesc(events) {
@@ -562,18 +573,31 @@ function App() {
   const [company, setCompany] = useState("all");
   const [adminPin, setAdminPin] = useState("");
   const [resetStatus, setResetStatus] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [toast, setToast] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
 
-  async function load() {
-    setStatus("Carregando eventos reais...");
+  async function load(options = {}) {
+    const silent = options?.silent === true;
+    if (!silent) setStatus("Carregando eventos reais...");
+    setIsLoading(true);
     try {
       const data = await fetchEvents();
       setEvents(data);
-      setStatus(data.length ? `Eventos carregados: ${data.length}` : "Nenhum evento salvo no período.");
+      setLastUpdatedAt(new Date());
+      setStatus(data.length ? `Eventos carregados: ${data.length}` : EMPTY_PERIOD_MESSAGE);
     } catch (error) {
       setEvents([]);
       setStatus(error.message || "Não consegui carregar os eventos.");
+    } finally {
+      setIsLoading(false);
     }
+  }
+
+  function showToast(message, type = "success") {
+    setToast({ id: Date.now(), message, type });
   }
 
   useEffect(() => {
@@ -581,6 +605,12 @@ function App() {
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timer = window.setTimeout(() => setToast(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
   const consultants = useMemo(() => {
     return ["all", ...new Set(events.map((event) => normalizeConsultant(event.consultant)))];
@@ -652,11 +682,12 @@ function App() {
     ["Adicionados", kpis.added],
     ["Cotações WhatsApp", kpis.quotes]
   ];
+  const lastUpdatedLabel = lastUpdatedAt ? timeOnly(lastUpdatedAt) : "--:--";
 
   function openModal(config) {
     setActiveModal({
       id: `${config.title}-${Date.now()}`,
-      empty: "Nenhum registro encontrado para os filtros atuais.",
+      empty: EMPTY_LIST_MESSAGE,
       ...config
     });
   }
@@ -739,15 +770,19 @@ function App() {
   }
 
   async function handleReset() {
-    setResetStatus("");
+    if (isResetting) return;
 
-    if (!localResetAllowed()) {
-      setResetStatus("Reset permitido somente com PIN configurado ou em ambiente local/dev.");
+    setResetStatus("");
+    const pinToSend = adminPin.trim();
+
+    if (ADMIN_PIN && !pinToSend) {
+      setResetStatus("Informe o PIN admin.");
       return;
     }
 
-    if (ADMIN_PIN && adminPin !== ADMIN_PIN) {
+    if (ADMIN_PIN && pinToSend !== ADMIN_PIN) {
       setResetStatus("PIN inválido.");
+      showToast(RESET_ERROR_MESSAGE, "error");
       return;
     }
 
@@ -755,14 +790,20 @@ function App() {
     if (!confirmed) return;
 
     try {
+      setIsResetting(true);
       setResetStatus("Limpando eventos...");
-      await clearEvents(ADMIN_PIN ? adminPin : "");
+      await clearEvents(ADMIN_PIN ? pinToSend : "");
       setEvents([]);
-      setResetStatus("Dados limpos com sucesso.");
-      setStatus("Nenhum evento salvo no período.");
-      await load();
+      setLastUpdatedAt(new Date());
+      setResetStatus(RESET_SUCCESS_MESSAGE);
+      setStatus(EMPTY_PERIOD_MESSAGE);
+      showToast(RESET_SUCCESS_MESSAGE);
+      await load({ silent: true });
     } catch (error) {
-      setResetStatus(error.message || "Não foi possível limpar os dados.");
+      setResetStatus(error.message ? `${RESET_ERROR_MESSAGE} (${error.message})` : RESET_ERROR_MESSAGE);
+      showToast(RESET_ERROR_MESSAGE, "error");
+    } finally {
+      setIsResetting(false);
     }
   }
 
@@ -775,13 +816,18 @@ function App() {
           <p>Leitura objetiva dos eventos do catálogo por empresa, busca, produto, consultor e cotação.</p>
         </div>
         <div className="hero-actions">
-          <button onClick={load} className="refresh"><RefreshCw size={17}/> Atualizar</button>
+          <button onClick={() => load()} className="refresh" disabled={isLoading || isResetting}>
+            <RefreshCw className={isLoading ? "spin" : undefined} size={17}/> {isLoading ? "Atualizando..." : "Atualizar"}
+          </button>
           <button onClick={exportCsv} className="refresh"><Download size={17}/> CSV</button>
         </div>
       </section>
 
       <section className="toolbar compact-toolbar">
-        <div className="status">{status}</div>
+        <div className="status">
+          <span>{status}</span>
+          <small>Última atualização: {lastUpdatedLabel}</small>
+        </div>
         <label><CalendarDays size={15}/> Período
           <select value={period} onChange={(event) => setPeriod(event.target.value)}>
             <option value="today">Hoje</option>
@@ -801,6 +847,8 @@ function App() {
           </select>
         </label>
       </section>
+
+      {!filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
 
       <SectionTitle title="Visão geral" subtitle="Resumo do período filtrado" />
       <section className="kpi-grid">
@@ -833,45 +881,45 @@ function App() {
 
       <SectionTitle title="Empresas" subtitle="Quem mais movimenta o catálogo" />
       <section className="columns">
-        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty="Nenhuma ação registrada no filtro atual." onOpen={openCompanyModal}/>
-        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty="Nenhuma busca registrada por empresa." onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
-        <Rank title="Clientes que mais enviaram cotações" rows={companyQuoteRank} empty="Nenhuma cotação registrada por empresa." onOpen={() => openQuoteModal("Cotações por empresa")}/>
+        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty={EMPTY_LIST_MESSAGE} onOpen={openCompanyModal}/>
+        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
+        <Rank title="Clientes que mais enviaram cotações" rows={companyQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openQuoteModal("Cotações por empresa")}/>
         <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp`} icon={<Send/>} onOpen={() => openQuoteModal("Valor total cotado")}/>
       </section>
 
       <SectionTitle title="Buscas" subtitle="Demanda declarada e oportunidades sem resultado" />
       <section className="columns">
-        <Rank title="Top buscas" rows={searchRank} empty="Nenhuma busca registrada no filtro atual." onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
-        <Rank title="Buscas sem resultado" rows={noResultRank} empty="Nenhuma busca sem resultado no filtro atual." onOpen={() => openSearchModal("Buscas sem resultado", byType.noResults)}/>
-        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty="Nenhuma busca vinculada a empresas." onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
-        <RecentEvents events={sortEventsDesc(allSearchEvents).slice(0, 10)} empty="Nenhuma busca recente no filtro atual." onOpen={() => openSearchModal("Buscas recentes", allSearchEvents)} />
+        <Rank title="Top buscas" rows={searchRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
+        <Rank title="Buscas sem resultado" rows={noResultRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas sem resultado", byType.noResults)}/>
+        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
+        <RecentEvents events={sortEventsDesc(allSearchEvents).slice(0, 10)} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas recentes", allSearchEvents)} />
       </section>
 
       <SectionTitle title="Produtos" subtitle="Interesse, carrinho e itens cotados" />
       <section className="columns">
-        <Rank title="Produtos mais abertos" rows={productOpenRank} empty="Nenhum produto aberto no filtro atual." onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
-        <Rank title="Produtos mais adicionados" rows={productAddedRank} empty="Nenhum produto adicionado ao carrinho." onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
-        <Rank title="Produtos mais removidos" rows={productRemovedRank} empty="Nenhum produto removido do carrinho." onOpen={() => openEventModal("Produtos removidos", byType.removed)}/>
-        <Rank title="Produtos mais cotados" rows={productQuotedRank} empty="Nenhum produto enviado para cotação." onOpen={() => openEventModal("Produtos mais cotados", byType.quotes, { expandQuoteProducts: true })}/>
+        <Rank title="Produtos mais abertos" rows={productOpenRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
+        <Rank title="Produtos mais adicionados" rows={productAddedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
+        <Rank title="Produtos mais removidos" rows={productRemovedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos removidos", byType.removed)}/>
+        <Rank title="Produtos mais cotados" rows={productQuotedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais cotados", byType.quotes, { expandQuoteProducts: true })}/>
       </section>
 
       <SectionTitle title="Consultores" subtitle="Origem comercial das interações" />
       <section className="columns">
         <ValueCard title="Consultores" value={consultantActivity.length} sub="Ativos no filtro atual" icon={<UserCheck/>} onOpen={openConsultantModal}/>
-        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty="Nenhum acesso vinculado a consultor." onOpen={openConsultantModal}/>
-        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty="Nenhuma busca vinculada a consultor." onOpen={openConsultantModal}/>
-        <Rank title="Cotações por consultor" rows={consultantQuoteRank} empty="Nenhuma cotação vinculada a consultor." onOpen={openConsultantModal}/>
-        <Rank title="Valor total cotado" rows={consultantValueRank} empty="Nenhum valor cotado por consultor." formatValue={money} onOpen={openConsultantModal}/>
+        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
+        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
+        <Rank title="Cotações por consultor" rows={consultantQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
+        <Rank title="Valor total cotado" rows={consultantValueRank} empty={EMPTY_LIST_MESSAGE} formatValue={money} onOpen={openConsultantModal}/>
       </section>
 
-      <SectionTitle title="Cotações" subtitle="Sinais mais próximos de venda" />
+      <SectionTitle title="Cotações" subtitle="Sinais mais próximos de cotação" />
       <section className="columns">
         <ValueCard title="Cotações WhatsApp" value={kpis.quotes} sub={`Total estimado ${money(kpis.quoteTotal)}`} icon={<Send/>} onOpen={() => openQuoteModal()}/>
-        <Rank title="Empresas que cotaram" rows={companyQuoteRank} empty="Nenhuma empresa enviou cotação." onOpen={() => openQuoteModal("Empresas que cotaram")}/>
-        <Rank title="Produtos cotados" rows={productQuotedRank} empty="Nenhum produto apareceu em cotações." onOpen={() => openEventModal("Produtos cotados", byType.quotes, { expandQuoteProducts: true })}/>
+        <Rank title="Empresas que cotaram" rows={companyQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openQuoteModal("Empresas que cotaram")}/>
+        <Rank title="Produtos cotados" rows={productQuotedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos cotados", byType.quotes, { expandQuoteProducts: true })}/>
         <RecentEvents
           title="Cotações recentes"
-          empty="Sem cotações recentes."
+          empty={EMPTY_LIST_MESSAGE}
           events={sortEventsDesc(byType.quotes).slice(0, 10)}
           detailFn={(event) => `${quoteItemsCount(event)} itens - ${money(event.cartTotal || event.total)}`}
           onOpen={() => openQuoteModal("Cotações recentes")}
@@ -888,14 +936,15 @@ function App() {
           <p className="admin-copy">Use apenas para limpar eventos de teste antes de iniciar uma nova rodada.</p>
           {ADMIN_PIN ? (
             <label className="admin-pin">PIN
-              <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" />
+              <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" disabled={isResetting} />
             </label>
           ) : null}
-          <button className="danger-button" type="button" onClick={handleReset} disabled={!localResetAllowed()}>
-            Limpar dados de teste
+          <button className="danger-button" type="button" onClick={handleReset} disabled={isResetting} aria-busy={isResetting}>
+            {isResetting ? <RefreshCw className="spin" size={17}/> : <Eraser size={17}/>}
+            {isResetting ? "Limpando..." : "Limpar dados de teste"}
           </button>
           {resetStatus ? <small className="admin-status">{resetStatus}</small> : null}
-          {!ADMIN_PIN ? <small className="admin-status">Sem PIN configurado: reset liberado somente em local/dev.</small> : null}
+          {!ADMIN_PIN ? <small className="admin-status">Sem PIN configurado no painel: reset liberado temporariamente para apresentação.</small> : null}
         </article>
       </section>
 
@@ -917,11 +966,12 @@ function App() {
               <span title={eventDetail(event)}>{eventDetail(event)}</span>
             </div>
           ))}
-          {!filtered.length ? <p className="empty">Nenhum evento para os filtros atuais.</p> : null}
+          {!filtered.length ? <p className="empty">{EMPTY_LIST_MESSAGE}</p> : null}
         </div>
       </section>
 
       {activeModal ? <HistoryModal key={activeModal.id} modal={activeModal} onClose={() => setActiveModal(null)} /> : null}
+      {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
     </main>
   );
 }
@@ -961,7 +1011,7 @@ function ValueCard({ title, value, sub, icon, onOpen }) {
   );
 }
 
-function Rank({ title, rows = [], empty, formatValue = (value) => value, onOpen }) {
+function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (value) => value, onOpen }) {
   return (
     <article className={`panel ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
       <div className="panel-head"><h2>{title}</h2><span>{rows.length ? `${rows.length} itens` : ""}</span></div>
@@ -978,7 +1028,7 @@ function Rank({ title, rows = [], empty, formatValue = (value) => value, onOpen 
   );
 }
 
-function RecentEvents({ events, title = "Buscas recentes", empty = "Sem buscas recentes.", detailFn = (event) => event.query || "Busca sem texto", onOpen }) {
+function RecentEvents({ events, title = "Buscas recentes", empty = EMPTY_LIST_MESSAGE, detailFn = (event) => event.query || "Busca sem texto", onOpen }) {
   return (
     <article className={`panel ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
       <div className="panel-head"><h2>{title}</h2><span>{events.length ? `${events.length} recentes` : ""}</span></div>
