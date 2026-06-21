@@ -435,8 +435,8 @@ function App() {
       <section className="hero">
         <div>
           <span className="eyebrow">Z Connect Analytics</span>
-          <h1>Go Live Analytics</h1>
-          <p>Eventos reais do catalogo publicado, agrupados por empresa, busca, produto e consultor.</p>
+          <h1>Analytics comercial diario</h1>
+          <p>Leitura objetiva dos eventos do catalogo por empresa, busca, produto, consultor e cotacao.</p>
         </div>
         <div className="hero-actions">
           <button onClick={load} className="refresh"><RefreshCw size={17}/> Atualizar</button>
@@ -466,6 +466,7 @@ function App() {
         </label>
       </section>
 
+      <SectionTitle title="Visao geral" subtitle="Resumo do periodo filtrado" />
       <section className="kpi-grid">
         <Kpi icon={<Users/>} label="Acessos" value={kpis.pageViews}/>
         <Kpi icon={<Search/>} label="Buscas" value={kpis.searches}/>
@@ -477,7 +478,8 @@ function App() {
         <Kpi icon={<Send/>} label="Cotacoes WhatsApp" value={kpis.quotes}/>
       </section>
 
-      <section className="main-grid">
+      <SectionTitle title="Funil" subtitle="Do acesso ate a cotacao" />
+      <section className="main-grid funnel-grid">
         <article className="panel">
           <div className="panel-head">
             <h2><TrendingUp size={18}/> Funil</h2>
@@ -490,11 +492,60 @@ function App() {
             })}
           </div>
         </article>
+        <ValueCard title="Valor cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotacoes WhatsApp no filtro atual`} icon={<Send/>}/>
+      </section>
 
+      <SectionTitle title="Empresas" subtitle="Quem mais movimenta o catalogo" />
+      <section className="columns">
+        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty="Sem eventos"/>
+        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty="Sem buscas"/>
+        <Rank title="Clientes que mais enviaram cotacoes" rows={companyQuoteRank} empty="Sem cotacoes"/>
+        <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotacoes WhatsApp`} icon={<Send/>}/>
+      </section>
+
+      <SectionTitle title="Buscas" subtitle="Demanda declarada e oportunidades sem resultado" />
+      <section className="columns">
+        <Rank title="Top buscas" rows={searchRank} empty="Sem buscas"/>
+        <Rank title="Buscas sem resultado" rows={noResultRank} empty="Sem buscas sem resultado"/>
+        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty="Sem buscas por empresa"/>
+        <RecentEvents events={byType.searches.slice(-10).reverse()} />
+      </section>
+
+      <SectionTitle title="Produtos" subtitle="Interesse, carrinho e itens cotados" />
+      <section className="columns">
+        <Rank title="Mais abertos" rows={productOpenRank} empty="Sem produtos abertos"/>
+        <Rank title="Mais adicionados" rows={productAddedRank} empty="Sem produtos adicionados"/>
+        <Rank title="Mais removidos" rows={productRemovedRank} empty="Sem produtos removidos"/>
+        <Rank title="Mais cotados" rows={productQuotedRank} empty="Sem produtos cotados"/>
+      </section>
+
+      <SectionTitle title="Consultores" subtitle="Origem comercial das interacoes" />
+      <section className="columns">
+        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty="Sem acessos"/>
+        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty="Sem buscas"/>
+        <Rank title="Cotacoes por consultor" rows={consultantQuoteRank} empty="Sem cotacoes"/>
+        <Rank title="Valor total cotado" rows={consultantValueRank} empty="Sem valores" formatValue={money}/>
+      </section>
+
+      <SectionTitle title="Cotacoes WhatsApp" subtitle="Sinais mais proximos de venda" />
+      <section className="columns">
+        <ValueCard title="Cotacoes enviadas" value={kpis.quotes} sub={`Total estimado ${money(kpis.quoteTotal)}`} icon={<Send/>}/>
+        <Rank title="Empresas que cotaram" rows={companyQuoteRank} empty="Sem cotacoes"/>
+        <Rank title="Produtos cotados" rows={productQuotedRank} empty="Sem produtos cotados"/>
+        <RecentEvents
+          title="Cotacoes recentes"
+          empty="Sem cotacoes recentes."
+          events={byType.quotes.slice(-10).reverse()}
+          detailFn={(event) => `${event.itemsCount || event.quantity || 0} itens - ${money(event.cartTotal || event.total)}`}
+        />
+      </section>
+
+      <SectionTitle title="Administracao/reset" subtitle="Rotina de limpeza para testes" />
+      <section className="admin-grid">
         <article className="panel admin-panel">
           <div className="panel-head">
-            <h2><Eraser size={18}/> Administracao</h2>
-            <span>Reset de dados</span>
+            <h2><Eraser size={18}/> Reset de dados</h2>
+            <span>Ambiente controlado</span>
           </div>
           <p className="admin-copy">Use apenas para limpar eventos de teste antes de iniciar uma nova rodada.</p>
           {ADMIN_PIN ? (
@@ -508,38 +559,6 @@ function App() {
           {resetStatus ? <small className="admin-status">{resetStatus}</small> : null}
           {!ADMIN_PIN ? <small className="admin-status">Sem PIN configurado: reset liberado somente em local/dev.</small> : null}
         </article>
-      </section>
-
-      <SectionTitle title="Empresas" />
-      <section className="columns">
-        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty="Sem eventos"/>
-        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty="Sem buscas"/>
-        <Rank title="Clientes que mais enviaram cotacoes" rows={companyQuoteRank} empty="Sem cotacoes"/>
-        <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotacoes WhatsApp`} icon={<Send/>}/>
-      </section>
-
-      <SectionTitle title="Buscas" />
-      <section className="columns">
-        <Rank title="Top buscas" rows={searchRank} empty="Sem buscas"/>
-        <Rank title="Buscas sem resultado" rows={noResultRank} empty="Sem buscas sem resultado"/>
-        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty="Sem buscas por empresa"/>
-        <RecentEvents events={byType.searches.slice(-10).reverse()} />
-      </section>
-
-      <SectionTitle title="Produtos" />
-      <section className="columns">
-        <Rank title="Mais abertos" rows={productOpenRank} empty="Sem produtos abertos"/>
-        <Rank title="Mais adicionados" rows={productAddedRank} empty="Sem produtos adicionados"/>
-        <Rank title="Mais removidos" rows={productRemovedRank} empty="Sem produtos removidos"/>
-        <Rank title="Mais cotados" rows={productQuotedRank} empty="Sem produtos cotados"/>
-      </section>
-
-      <SectionTitle title="Consultores" />
-      <section className="columns">
-        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty="Sem acessos"/>
-        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty="Sem buscas"/>
-        <Rank title="Cotacoes por consultor" rows={consultantQuoteRank} empty="Sem cotacoes"/>
-        <Rank title="Valor total cotado" rows={consultantValueRank} empty="Sem valores" formatValue={money}/>
       </section>
 
       <section className="panel">
@@ -567,8 +586,8 @@ function App() {
   );
 }
 
-function SectionTitle({ title }) {
-  return <h2 className="section-title">{title}</h2>;
+function SectionTitle({ title, subtitle }) {
+  return <div className="section-title"><h2>{title}</h2>{subtitle ? <span>{subtitle}</span> : null}</div>;
 }
 
 function Kpi({ icon, label, value }) {
@@ -594,20 +613,20 @@ function Rank({ title, rows = [], empty, formatValue = (value) => value }) {
   </article>;
 }
 
-function RecentEvents({ events }) {
+function RecentEvents({ events, title = "Buscas recentes", empty = "Sem buscas recentes.", detailFn = (event) => event.query || "Busca sem texto" }) {
   return <article className="panel">
-    <div className="panel-head"><h2>Buscas recentes</h2></div>
+    <div className="panel-head"><h2>{title}</h2></div>
     <div className="timeline">
       {events.length ? events.map((event) => (
         <div className="timeline-row" key={`${event.id}-${event.timestamp}`}>
           <i className={`dot ${event.event}`}/>
           <div>
             <strong>{event.companyName}</strong>
-            <span>{event.query || "Busca sem texto"}</span>
+            <span>{detailFn(event)}</span>
           </div>
           <time>{dateTime(event.timestamp)}</time>
         </div>
-      )) : <p className="empty">Sem buscas recentes.</p>}
+      )) : <p className="empty">{empty}</p>}
     </div>
   </article>;
 }
