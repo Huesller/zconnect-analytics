@@ -273,11 +273,12 @@ select{
   box-shadow:0 0 0 4px rgba(255,255,255,.04);
 }
 .dot.search{background:#68a7ff}
-.dot.view_product{background:#a77dff}
+.dot.product_open,.dot.view_product{background:#a77dff}
 .dot.favorite{background:#ff6b9e}
 .dot.add_to_cart{background:var(--amber)}
-.dot.whatsapp_checkout{background:var(--green)}
-.dot.sem_resultado,.dot.search_no_result{background:#ff5660}
+.dot.remove_from_cart,.dot.clear_cart{background:#ff8a5c}
+.dot.whatsapp_quote,.dot.whatsapp_checkout{background:var(--green)}
+.dot.sem_resultado,.dot.search_no_result,.dot.search_no_results{background:#ff5660}
 .timeline-row strong{
   display:block;
   font-size:12px;
@@ -369,3 +370,86 @@ select{
 .badge.warn{background:rgba(255,184,77,.15);color:var(--amber)}
 @media (max-width:1180px){.opportunity-grid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width:760px){.opportunity-grid{grid-template-columns:1fr}.compact-toolbar{position:static}}
+
+/* Sprint Analytics Go Live */
+.section-title{
+  margin:18px 0 10px;
+  font-size:18px;
+  letter-spacing:-.02em;
+}
+.admin-panel{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.admin-copy{
+  font-size:13px;
+}
+.admin-pin{
+  justify-content:space-between;
+}
+.admin-pin input{
+  min-width:0;
+  width:170px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:#071326;
+  color:#fff;
+  padding:8px 9px;
+}
+.danger-button{
+  border:0;
+  border-radius:12px;
+  padding:11px 14px;
+  background:linear-gradient(180deg,var(--red),var(--red2));
+  color:#fff;
+  font-weight:900;
+  cursor:pointer;
+}
+.danger-button:disabled{
+  opacity:.45;
+  cursor:not-allowed;
+}
+.admin-status{
+  color:var(--muted);
+  font-size:12px;
+}
+.event-table{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+.event-head,.event-row{
+  display:grid;
+  grid-template-columns:82px 150px minmax(130px,.9fr) 100px minmax(180px,1.3fr);
+  gap:8px;
+  align-items:center;
+}
+.event-head{
+  padding:0 9px 4px;
+  color:var(--muted2);
+  font-size:11px;
+  font-weight:900;
+  text-transform:uppercase;
+}
+.event-row{
+  padding:9px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:rgba(255,255,255,.033);
+}
+.event-row span,.event-row strong{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+}
+.event-row span{
+  color:var(--muted);
+}
+@media (max-width:760px){
+  .event-head{display:none}
+  .event-row{grid-template-columns:1fr 1fr}
+  .event-row span:last-child{grid-column:1 / -1}
+}

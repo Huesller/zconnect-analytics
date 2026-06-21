@@ -1,116 +1,54 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Search,
-  Eye,
-  ShoppingCart,
-  Send,
-  TrendingUp,
-  Trophy,
-  Users,
-  Package,
-  Clock,
   AlertTriangle,
-  RefreshCw,
-  Download,
-  Filter,
-  CalendarDays,
   Building2,
+  CalendarDays,
+  Download,
+  Eraser,
+  Eye,
+  Filter,
+  RefreshCw,
+  Search,
+  Send,
+  ShoppingCart,
+  Trash2,
+  TrendingUp,
   UserCheck,
-  XCircle,
-  ListChecks
+  Users,
+  XCircle
 } from "lucide-react";
 import "./styles.css";
 
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxcISxjVLPj5mBz0oem-5FrDjL0fOf2NtX6Ry5prry2AIWce5Tsn2NwRinB2tQKMs0T/exec";
+const ANALYTICS_API_URL =
+  import.meta.env.VITE_ANALYTICS_API_URL ||
+  "https://script.google.com/macros/s/AKfycbxcISxjVLPj5mBz0oem-5FrDjL0fOf2NtX6Ry5prry2AIWce5Tsn2NwRinB2tQKMs0T/exec";
 
-const SAMPLE_EVENTS = [
-  {
-    createdAt: "2026-06-19T08:10:00.000Z",
-    event: "search",
-    consultant: "ney",
-    companyName: "Auto Peças Silva",
-    clientId: "zc_sample_001",
-    query: "parachoque hb20"
-  },
-  {
-    createdAt: "2026-06-19T08:11:00.000Z",
-    event: "view_product",
-    consultant: "ney",
-    companyName: "Auto Peças Silva",
-    clientId: "zc_sample_001",
-    productCode: "503450",
-    productName: "Alma Parachoque HB20",
-    brand: "RETOV",
-    price: 189.9
-  },
-  {
-    createdAt: "2026-06-19T08:12:00.000Z",
-    event: "add_to_cart",
-    consultant: "ney",
-    companyName: "Auto Peças Silva",
-    clientId: "zc_sample_001",
-    productCode: "503450",
-    productName: "Alma Parachoque HB20",
-    brand: "RETOV",
-    price: 189.9,
-    quantity: 2,
-    total: 379.8
-  },
-  {
-    createdAt: "2026-06-19T09:22:00.000Z",
-    event: "search",
-    consultant: "huesller",
-    companyName: "Peças Brasil",
-    clientId: "zc_sample_002",
-    query: "grade gol"
-  },
-  {
-    createdAt: "2026-06-19T09:23:00.000Z",
-    event: "view_product",
-    consultant: "huesller",
-    companyName: "Peças Brasil",
-    clientId: "zc_sample_002",
-    productCode: "778899",
-    productName: "Grade Gol G5/G6",
-    brand: "Z AUTO",
-    price: 95
-  },
-  {
-    createdAt: "2026-06-19T09:25:00.000Z",
-    event: "whatsapp_checkout",
-    consultant: "huesller",
-    companyName: "Peças Brasil",
-    clientId: "zc_sample_002",
-    productCode: "778899",
-    productName: "Grade Gol G5/G6",
-    brand: "Z AUTO",
-    price: 95,
-    quantity: 1,
-    total: 95
-  },
-  {
-    createdAt: "2026-06-19T10:12:00.000Z",
-    event: "sem_resultado",
-    consultant: "francisco",
-    companyName: "Mega Auto Center",
-    clientId: "zc_sample_003",
-    query: "farol hb20 2024"
-  }
-].map((event, index) => ({ id: `sample-${index}`, ...event }));
+const ADMIN_PIN = String(import.meta.env.VITE_ANALYTICS_ADMIN_PIN || "").trim();
+
+const EVENT_ALIASES = {
+  view_product: "product_open",
+  search_no_result: "search_no_results",
+  sem_resultado: "search_no_results",
+  whatsapp_checkout: "whatsapp_quote",
+  whatsapp_order: "whatsapp_quote"
+};
 
 const EVENT_LABELS = {
+  page_view: "Acesso",
   search: "Busca",
-  search_start: "Início busca",
-  search_result: "Resultado busca",
-  search_click: "Clique busca",
-  search_no_result: "Sem resultado",
-  sem_resultado: "Sem resultado",
-  view_product: "Visualizou",
-  favorite: "Favorito",
-  add_to_cart: "Carrinho",
-  whatsapp_checkout: "WhatsApp"
+  search_no_results: "Busca sem resultado",
+  product_open: "Produto aberto",
+  add_to_cart: "Adicionado",
+  remove_from_cart: "Removido",
+  clear_cart: "Carrinho limpo",
+  whatsapp_quote: "Cotacao WhatsApp"
 };
+
+function normalizeEvent(value) {
+  const event = String(value || "").trim();
+  return EVENT_ALIASES[event] || event;
+}
 
 function normalizeConsultant(value) {
   const slug = String(value || "sem_consultor").toLowerCase().trim();
@@ -120,7 +58,7 @@ function normalizeConsultant(value) {
 
 function normalizeCompany(value) {
   const company = String(value || "").trim();
-  return company || "Empresa não informada";
+  return company || "Empresa nao informada";
 }
 
 function safeNumber(value) {
@@ -135,402 +73,370 @@ function readField(row, keys, fallback = "") {
   return fallback;
 }
 
+function parseProducts(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return [];
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function eventTimestamp(row) {
+  return readField(row, ["timestamp", "createdAt", "date", "data"], new Date().toISOString());
+}
+
+function normalizeObjectEvent(row, index) {
+  const event = normalizeEvent(readField(row, ["event", "acao", "type"], ""));
+  const timestamp = eventTimestamp(row);
+  const quantity = safeNumber(readField(row, ["quantity", "quantidade"]));
+  const total = safeNumber(readField(row, ["total", "cart_total"]));
+  const products = parseProducts(readField(row, ["products", "items", "productList"]));
+  const cartTotal = safeNumber(readField(row, ["cartTotal", "cart_total", "total", "displayedPrice"], total));
+  const itemsCount = safeNumber(readField(row, ["itemsCount", "itemCount", "quantity", "quantidade"], quantity));
+
+  return {
+    id: row.id || row.eventId || `row-${index}`,
+    timestamp,
+    createdAt: timestamp,
+    event,
+    consultant: normalizeConsultant(readField(row, ["consultant", "consultor", "consultant_slug"])),
+    companyName: normalizeCompany(readField(row, ["companyName", "empresa", "company", "cliente", "clientName", "nomeEmpresa"])),
+    clientId: readField(row, ["clientId", "clienteId", "customerId", "sessionId"], ""),
+    sessionId: readField(row, ["sessionId"], ""),
+    query: String(readField(row, ["query", "search_query", "busca"], "")).trim(),
+    productCode: String(readField(row, ["productCode", "codigo", "product_code"], "")).trim(),
+    productName: String(readField(row, ["productName", "descricao", "product_name"], "")).trim(),
+    brand: String(readField(row, ["brand", "marca", "fabricante"], "")).trim(),
+    price: safeNumber(readField(row, ["price", "preco"])),
+    quantity,
+    total,
+    cartTotal,
+    itemsCount,
+    products,
+    page: readField(row, ["page"], ""),
+    referrer: readField(row, ["referrer"], ""),
+    userAgent: readField(row, ["userAgent"], ""),
+    searchTimeMs: safeNumber(readField(row, ["searchTimeMs", "search_time", "elapsedMs"])),
+    resultsCount: safeNumber(readField(row, ["resultsCount", "results", "resultCount"]))
+  };
+}
+
+function normalizeArrayEvent(row, index) {
+  return normalizeObjectEvent({
+    id: `row-${index}`,
+    createdAt: row[0],
+    timestamp: row[0],
+    event: row[1],
+    consultant: row[2],
+    query: row[3],
+    productCode: row[4],
+    productName: row[5],
+    brand: row[6],
+    price: row[7],
+    quantity: row[8],
+    total: row[9],
+    page: row[10],
+    userAgent: row[11],
+    sessionId: row[12],
+    eventId: row[13],
+    clientId: row[14],
+    companyName: row[15],
+    searchTimeMs: row[18],
+    resultsCount: row[19]
+  }, index);
+}
+
 function parseEvents(payload) {
   let rows = [];
   if (Array.isArray(payload)) rows = payload;
   if (payload && Array.isArray(payload.events)) rows = payload.events;
   if (payload && Array.isArray(payload.data)) rows = payload.data;
 
-  return rows.map((row, index) => {
-    if (Array.isArray(row)) {
-      return {
-        id: `row-${index}`,
-        createdAt: row[0] || row[1] || new Date().toISOString(),
-        event: row[1] || "",
-        consultant: normalizeConsultant(row[2]),
-        query: row[3] || "",
-        productCode: row[4] || "",
-        productName: row[5] || "",
-        brand: row[6] || "",
-        price: safeNumber(row[7]),
-        quantity: safeNumber(row[8]),
-        total: safeNumber(row[9]),
-        page: row[10] || "",
-        userAgent: row[11] || "",
-        sessionId: row[12] || "",
-        eventId: row[13] || "",
-        clientId: row[14] || row[12] || "",
-        companyName: normalizeCompany(row[15] || row[16] || row[17] || ""),
-        searchTimeMs: safeNumber(row[18]),
-        resultsCount: safeNumber(row[19])
-      };
-    }
-
-    const companyName = normalizeCompany(readField(row, [
-      "companyName",
-      "empresa",
-      "company",
-      "cliente",
-      "clientName",
-      "nomeEmpresa"
-    ]));
-
-    return {
-      id: row.id || `row-${index}`,
-      createdAt: readField(row, ["createdAt", "date", "data", "timestamp"], new Date().toISOString()),
-      event: readField(row, ["event", "acao", "type"], ""),
-      consultant: normalizeConsultant(readField(row, ["consultor", "consultant", "consultant_slug"])),
-      query: readField(row, ["query", "search_query", "busca"], ""),
-      productCode: readField(row, ["productCode", "codigo", "product_code"], ""),
-      productName: readField(row, ["productName", "descricao", "product_name"], ""),
-      brand: readField(row, ["brand", "marca", "fabricante"], ""),
-      price: safeNumber(readField(row, ["price", "preco"])),
-      quantity: safeNumber(readField(row, ["quantity", "quantidade"])),
-      total: safeNumber(readField(row, ["total", "cart_total"])),
-      page: readField(row, ["page"], ""),
-      userAgent: readField(row, ["userAgent"], ""),
-      sessionId: readField(row, ["sessionId"], ""),
-      eventId: readField(row, ["eventId"], ""),
-      clientId: readField(row, ["clientId", "clienteId", "customerId"], readField(row, ["sessionId"], "")),
-      companyName,
-      searchTimeMs: safeNumber(readField(row, ["searchTimeMs", "search_time", "elapsedMs"])),
-      resultsCount: safeNumber(readField(row, ["resultsCount", "results", "resultCount"]))
-    };
-  }).filter(e => e.event);
+  return rows
+    .map((row, index) => (Array.isArray(row) ? normalizeArrayEvent(row, index) : normalizeObjectEvent(row, index)))
+    .filter((event) => event.event);
 }
 
 async function fetchEvents() {
-  const url = `${SCRIPT_URL}?action=events&cache=${Date.now()}`;
+  const url = `${ANALYTICS_API_URL}?action=events&cache=${Date.now()}`;
   const response = await fetch(url, { method: "GET" });
-  if (!response.ok) throw new Error("Não foi possível carregar os eventos.");
+  if (!response.ok) throw new Error("Nao foi possivel carregar os eventos.");
   const text = await response.text();
   try {
     return parseEvents(JSON.parse(text));
   } catch {
     const lines = text.trim().split(/\r?\n/).filter(Boolean);
-    const rows = lines.slice(1).map(line => line.split(","));
+    const rows = lines.slice(1).map((line) => line.split(","));
     return parseEvents(rows);
   }
 }
 
-function isSameDay(dateLike, selected) {
+async function clearEvents(pin) {
+  const body = JSON.stringify({ action: "clear_events", pin });
+
+  try {
+    const response = await fetch(ANALYTICS_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "Falha ao limpar eventos.");
+    return data;
+  } catch (error) {
+    const fallbackUrl = `${ANALYTICS_API_URL}?action=clear_events&pin=${encodeURIComponent(pin || "")}&cache=${Date.now()}`;
+    const response = await fetch(fallbackUrl, { method: "GET" });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || error.message || "Falha ao limpar eventos.");
+    return data;
+  }
+}
+
+function isSamePeriod(dateLike, selected) {
   if (selected === "all") return true;
   const d = new Date(dateLike);
   const now = new Date();
   if (Number.isNaN(d.getTime())) return false;
   if (selected === "today") return d.toDateString() === now.toDateString();
-  if (selected === "7d") {
-    const cutoff = new Date();
-    cutoff.setDate(now.getDate() - 7);
-    return d >= cutoff;
-  }
-  if (selected === "30d") {
-    const cutoff = new Date();
-    cutoff.setDate(now.getDate() - 30);
-    return d >= cutoff;
-  }
-  return true;
+
+  const days = selected === "7d" ? 7 : 30;
+  const cutoff = new Date(now);
+  cutoff.setDate(now.getDate() - days);
+  return d >= cutoff;
 }
 
-function countBy(items, keyFn) {
+function countBy(items, keyFn, weightFn = () => 1) {
   const map = new Map();
-  items.forEach(item => {
+  items.forEach((item) => {
     const key = String(keyFn(item) || "").trim();
     if (!key) return;
-    map.set(key, (map.get(key) || 0) + 1);
+    map.set(key, (map.get(key) || 0) + safeNumber(weightFn(item) || 1));
   });
-  return [...map.entries()].sort((a,b) => b[1] - a[1]);
+  return [...map.entries()].sort((a, b) => b[1] - a[1]);
 }
 
 function money(value) {
   return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function percent(value) {
-  return `${Number(value || 0).toFixed(1).replace(".", ",")}%`;
-}
-
 function dateTime(value) {
   const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "—";
+  if (Number.isNaN(d.getTime())) return "-";
   return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-function clientKey(event) {
-  return event.clientId || event.companyName || event.sessionId || "sem_cliente";
+function productFromEvent(event) {
+  return {
+    productCode: event.productCode,
+    productName: event.productName,
+    brand: event.brand,
+    quantity: event.quantity || 1,
+    price: event.price,
+    total: event.total
+  };
 }
 
-function eventTitle(event) {
-  if (event.event === "search" || event.event === "sem_resultado" || event.event === "search_no_result") {
-    return event.query || "Busca sem texto";
-  }
-  return [event.productCode, event.productName].filter(Boolean).join(" - ") || EVENT_LABELS[event.event] || event.event;
+function productLabel(product) {
+  const code = product.productCode || product.code || "";
+  const name = product.productName || product.name || product.description || "";
+  return [code, name].filter(Boolean).join(" - ") || "Produto nao informado";
+}
+
+function quoteProducts(event) {
+  const products = event.products.length ? event.products : [productFromEvent(event)];
+  return products.filter((product) => productLabel(product) !== "Produto nao informado");
+}
+
+function productRank(events, options = {}) {
+  const { expandQuotes = false, weightQuantity = false } = options;
+  const map = new Map();
+
+  events.forEach((event) => {
+    const products = expandQuotes ? quoteProducts(event) : [productFromEvent(event)];
+    products.forEach((product) => {
+      const label = productLabel(product);
+      if (!label || label === "Produto nao informado") return;
+      const weight = weightQuantity ? Math.max(1, safeNumber(product.quantity || event.quantity || 1)) : 1;
+      map.set(label, (map.get(label) || 0) + weight);
+    });
+  });
+
+  return [...map.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function localResetAllowed() {
+  if (ADMIN_PIN) return true;
+  const host = window.location.hostname;
+  return import.meta.env.DEV || host === "localhost" || host === "127.0.0.1" || host === "";
 }
 
 function App() {
   const [events, setEvents] = useState([]);
-  const [status, setStatus] = useState("Carregando eventos...");
+  const [status, setStatus] = useState("Carregando eventos reais...");
   const [period, setPeriod] = useState("today");
   const [consultant, setConsultant] = useState("all");
   const [company, setCompany] = useState("all");
-  const [activeClient, setActiveClient] = useState("all");
-  const [usingSample, setUsingSample] = useState(false);
+  const [adminPin, setAdminPin] = useState("");
+  const [resetStatus, setResetStatus] = useState("");
 
   async function load() {
-    setStatus("Carregando eventos...");
+    setStatus("Carregando eventos reais...");
     try {
       const data = await fetchEvents();
-      if (!data.length) {
-        setEvents(SAMPLE_EVENTS);
-        setUsingSample(true);
-        setStatus("Sem eventos reais ainda. Exibindo dados de exemplo.");
-      } else {
-        setEvents(data);
-        setUsingSample(false);
-        setStatus(`Eventos carregados: ${data.length}`);
-      }
-    } catch (err) {
-      setEvents(SAMPLE_EVENTS);
-      setUsingSample(true);
-      setStatus("Não consegui ler a planilha ainda. Exibindo dados de exemplo.");
+      setEvents(data);
+      setStatus(data.length ? `Eventos carregados: ${data.length}` : "Nenhum evento salvo no periodo.");
+    } catch (error) {
+      setEvents([]);
+      setStatus(error.message || "Nao consegui carregar os eventos.");
     }
   }
 
   useEffect(() => {
     load();
-    const timer = setInterval(load, 30000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(load, 30000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  const consultants = useMemo(() => ["all", ...new Set(events.map(e => normalizeConsultant(e.consultant)))], [events]);
+  const consultants = useMemo(() => {
+    return ["all", ...new Set(events.map((event) => normalizeConsultant(event.consultant)))];
+  }, [events]);
 
   const companies = useMemo(() => {
-    const names = [...new Set(events.map(e => normalizeCompany(e.companyName)))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+    const names = [...new Set(events.map((event) => normalizeCompany(event.companyName)))]
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
     return ["all", ...names];
   }, [events]);
 
-  const periodFiltered = useMemo(() => events.filter(e => isSameDay(e.createdAt, period)), [events, period]);
+  const periodFiltered = useMemo(() => events.filter((event) => isSamePeriod(event.createdAt, period)), [events, period]);
 
-  const filtered = useMemo(() => periodFiltered.filter(e => {
-    const okConsultant = consultant === "all" || normalizeConsultant(e.consultant) === consultant;
-    const okCompany = company === "all" || normalizeCompany(e.companyName) === company;
-    const okClient = activeClient === "all" || clientKey(e) === activeClient;
-    return okConsultant && okCompany && okClient;
-  }), [periodFiltered, consultant, company, activeClient]);
+  const filtered = useMemo(() => periodFiltered.filter((event) => {
+    const okConsultant = consultant === "all" || normalizeConsultant(event.consultant) === consultant;
+    const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
+    return okConsultant && okCompany;
+  }), [periodFiltered, consultant, company]);
 
-  const clientRows = useMemo(() => {
-    const map = new Map();
+  const byType = useMemo(() => ({
+    pageViews: filtered.filter((event) => event.event === "page_view"),
+    searches: filtered.filter((event) => event.event === "search"),
+    noResults: filtered.filter((event) => event.event === "search_no_results"),
+    productOpen: filtered.filter((event) => event.event === "product_open"),
+    added: filtered.filter((event) => event.event === "add_to_cart"),
+    removed: filtered.filter((event) => event.event === "remove_from_cart"),
+    cleared: filtered.filter((event) => event.event === "clear_cart"),
+    quotes: filtered.filter((event) => event.event === "whatsapp_quote")
+  }), [filtered]);
 
-    periodFiltered.forEach(event => {
-      const key = clientKey(event);
-      if (!map.has(key)) {
-        map.set(key, {
-          key,
-          clientId: event.clientId || "",
-          companyName: normalizeCompany(event.companyName),
-          consultant: normalizeConsultant(event.consultant),
-          searches: 0,
-          views: 0,
-          favorites: 0,
-          carts: 0,
-          whats: 0,
-          noResult: 0,
-          revenue: 0,
-          lastAt: event.createdAt
-        });
-      }
+  const kpis = useMemo(() => ({
+    pageViews: byType.pageViews.length,
+    searches: byType.searches.length,
+    noResults: byType.noResults.length,
+    productOpen: byType.productOpen.length,
+    added: byType.added.length,
+    removed: byType.removed.length,
+    cleared: byType.cleared.length,
+    quotes: byType.quotes.length,
+    quoteTotal: byType.quotes.reduce((sum, event) => sum + safeNumber(event.cartTotal || event.total), 0)
+  }), [byType]);
 
-      const row = map.get(key);
-      row.companyName = normalizeCompany(event.companyName) !== "Empresa não informada" ? normalizeCompany(event.companyName) : row.companyName;
-      row.consultant = normalizeConsultant(event.consultant) !== "sem_consultor" ? normalizeConsultant(event.consultant) : row.consultant;
-      if (new Date(event.createdAt) > new Date(row.lastAt)) row.lastAt = event.createdAt;
+  const companyActiveRank = useMemo(() => countBy(filtered, (event) => normalizeCompany(event.companyName)), [filtered]);
+  const companySearchRank = useMemo(() => countBy(byType.searches, (event) => normalizeCompany(event.companyName)), [byType.searches]);
+  const companyQuoteRank = useMemo(() => countBy(byType.quotes, (event) => normalizeCompany(event.companyName)), [byType.quotes]);
 
-      if (event.event === "search") row.searches++;
-      if (event.event === "view_product") row.views++;
-      if (event.event === "favorite") row.favorites++;
-      if (event.event === "add_to_cart") row.carts++;
-      if (event.event === "whatsapp_checkout") {
-        row.whats++;
-        row.revenue += event.total || event.price * (event.quantity || 1);
-      }
-      if (event.event === "sem_resultado" || event.event === "search_no_result") row.noResult++;
-    });
+  const searchRank = useMemo(() => countBy(byType.searches, (event) => event.query.toLowerCase()), [byType.searches]);
+  const noResultRank = useMemo(() => countBy(byType.noResults, (event) => event.query.toLowerCase()), [byType.noResults]);
+  const searchByCompanyRank = useMemo(() => countBy(byType.searches, (event) => normalizeCompany(event.companyName)), [byType.searches]);
 
-    return [...map.values()].sort((a, b) => new Date(b.lastAt) - new Date(a.lastAt));
-  }, [periodFiltered]);
+  const productOpenRank = useMemo(() => productRank(byType.productOpen), [byType.productOpen]);
+  const productAddedRank = useMemo(() => productRank(byType.added, { weightQuantity: true }), [byType.added]);
+  const productRemovedRank = useMemo(() => productRank(byType.removed, { weightQuantity: true }), [byType.removed]);
+  const productQuotedRank = useMemo(() => productRank(byType.quotes, { expandQuotes: true, weightQuantity: true }), [byType.quotes]);
 
-  const kpis = useMemo(() => {
-    const searches = filtered.filter(e => e.event === "search").length;
-    const noResult = filtered.filter(e => e.event === "sem_resultado" || e.event === "search_no_result").length;
-    const views = filtered.filter(e => e.event === "view_product").length;
-    const favorites = filtered.filter(e => e.event === "favorite").length;
-    const carts = filtered.filter(e => e.event === "add_to_cart").length;
-    const whats = filtered.filter(e => e.event === "whatsapp_checkout").length;
-    const revenue = filtered.filter(e => e.event === "whatsapp_checkout").reduce((sum,e) => sum + (e.total || e.price * (e.quantity || 1)), 0);
-    const clients = new Set(filtered.map(clientKey)).size;
-    const companiesCount = new Set(filtered.map(e => normalizeCompany(e.companyName))).size;
-    return {
-      searches,
-      noResult,
-      views,
-      favorites,
-      carts,
-      whats,
-      revenue,
-      clients,
-      companiesCount,
-      conversion: searches ? (whats / searches) * 100 : 0,
-      cartConversion: carts ? (whats / carts) * 100 : 0,
-      ticket: whats ? revenue / whats : 0
-    };
-  }, [filtered]);
+  const consultantAccessRank = useMemo(() => countBy(byType.pageViews, (event) => normalizeConsultant(event.consultant)), [byType.pageViews]);
+  const consultantSearchRank = useMemo(() => countBy(byType.searches, (event) => normalizeConsultant(event.consultant)), [byType.searches]);
+  const consultantQuoteRank = useMemo(() => countBy(byType.quotes, (event) => normalizeConsultant(event.consultant)), [byType.quotes]);
+  const consultantValueRank = useMemo(() => countBy(byType.quotes, (event) => normalizeConsultant(event.consultant), (event) => event.cartTotal || event.total), [byType.quotes]);
 
-  const consultantRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => normalizeConsultant(e.consultant)), [filtered]);
-  const companyRank = useMemo(() => countBy(filtered, e => normalizeCompany(e.companyName)), [filtered]);
-  const companyCheckoutRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => normalizeCompany(e.companyName)), [filtered]);
-  const productRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => [e.productCode, e.productName].filter(Boolean).join(" - ")), [filtered]);
-  const cartAbandonRows = useMemo(() => {
-    const cartMap = new Map();
-    const checkoutMap = new Map();
-
-    filtered.forEach(e => {
-      const key = `${clientKey(e)}::${e.productCode || e.productName || "produto"}`;
-      if (e.event === "add_to_cart") {
-        const current = cartMap.get(key) || { event: e, count: 0 };
-        current.count += 1;
-        if (new Date(e.createdAt) > new Date(current.event.createdAt)) current.event = e;
-        cartMap.set(key, current);
-      }
-      if (e.event === "whatsapp_checkout") checkoutMap.set(key, true);
-    });
-
-    return [...cartMap.values()]
-      .filter(row => !checkoutMap.has(`${clientKey(row.event)}::${row.event.productCode || row.event.productName || "produto"}`))
-      .sort((a, b) => new Date(b.event.createdAt) - new Date(a.event.createdAt))
-      .slice(0, 10)
-      .map(row => row.event);
-  }, [filtered]);
-
-  const searchRank = useMemo(() => countBy(filtered.filter(e => e.event === "search"), e => e.query?.toLowerCase().trim()), [filtered]);
-  const noResultRank = useMemo(() => countBy(filtered.filter(e => e.event === "sem_resultado" || e.event === "search_no_result"), e => e.query?.toLowerCase().trim()), [filtered]);
-  const brandRank = useMemo(() => countBy(filtered.filter(e => e.event === "whatsapp_checkout"), e => e.brand), [filtered]);
-
-  const opportunityRows = useMemo(() => {
-    const byClientQuery = new Map();
-    const rows = [];
-
-    filtered.forEach(event => {
-      const baseKey = clientKey(event);
-      if ((event.event === "sem_resultado" || event.event === "search_no_result") && event.query) {
-        const key = `${baseKey}::missing::${String(event.query).toLowerCase().trim()}`;
-        const item = byClientQuery.get(key) || {
-          type: "Sem resultado",
-          companyName: normalizeCompany(event.companyName),
-          consultant: normalizeConsultant(event.consultant),
-          text: event.query,
-          count: 0,
-          lastAt: event.createdAt,
-          priority: 85
-        };
-        item.count += 1;
-        if (new Date(event.createdAt) > new Date(item.lastAt)) item.lastAt = event.createdAt;
-        byClientQuery.set(key, item);
-      }
-
-      if (event.event === "search" && event.query) {
-        const key = `${baseKey}::search::${String(event.query).toLowerCase().trim()}`;
-        const item = byClientQuery.get(key) || {
-          type: "Busca recorrente",
-          companyName: normalizeCompany(event.companyName),
-          consultant: normalizeConsultant(event.consultant),
-          text: event.query,
-          count: 0,
-          lastAt: event.createdAt,
-          priority: 45
-        };
-        item.count += 1;
-        if (new Date(event.createdAt) > new Date(item.lastAt)) item.lastAt = event.createdAt;
-        byClientQuery.set(key, item);
-      }
-    });
-
-    byClientQuery.forEach(item => {
-      if (item.type === "Sem resultado" || item.count >= 2) rows.push(item);
-    });
-
-    cartAbandonRows.forEach(event => {
-      rows.push({
-        type: "Carrinho abandonado",
-        companyName: normalizeCompany(event.companyName),
-        consultant: normalizeConsultant(event.consultant),
-        text: eventTitle(event),
-        count: 1,
-        lastAt: event.createdAt,
-        priority: 95
-      });
-    });
-
-    return rows
-      .sort((a, b) => (b.priority + b.count * 6 + new Date(b.lastAt).getTime() / 1e13) - (a.priority + a.count * 6 + new Date(a.lastAt).getTime() / 1e13))
-      .slice(0, 12);
-  }, [filtered, cartAbandonRows]);
-
-  const journey = useMemo(() => {
-    const selectedKey = activeClient !== "all" ? activeClient : (clientRows[0]?.key || "all");
-    if (selectedKey === "all") return [];
-    return periodFiltered
-      .filter(e => clientKey(e) === selectedKey)
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-      .slice(0, 30);
-  }, [activeClient, clientRows, periodFiltered]);
-
-  const topConsultant = consultantRank[0];
-  const topProduct = productRank[0];
-  const topCompany = companyCheckoutRank[0] || companyRank[0];
-  const topMissing = noResultRank[0];
+  const funnel = [
+    ["Acessos", kpis.pageViews],
+    ["Buscas", kpis.searches],
+    ["Produtos abertos", kpis.productOpen],
+    ["Adicionados", kpis.added],
+    ["Cotacoes WhatsApp", kpis.quotes]
+  ];
 
   function exportCsv() {
     const header = [
-      "createdAt",
+      "timestamp",
       "event",
-      "consultant",
       "companyName",
-      "clientId",
+      "consultant",
       "query",
       "productCode",
       "productName",
       "brand",
-      "price",
       "quantity",
-      "total",
-      "sessionId"
+      "price",
+      "itemsCount",
+      "cartTotal",
+      "products"
     ];
-    const rows = filtered.map(e => header.map(key => `"${String(e[key] ?? "").replace(/"/g, '""')}"`).join(";"));
+    const rows = filtered.map((event) => header.map((key) => {
+      const value = key === "products" ? JSON.stringify(event.products || []) : event[key];
+      return `"${String(value ?? "").replace(/"/g, '""')}"`;
+    }).join(";"));
     const csv = [header.join(";"), ...rows].join("\n");
     const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `zconnect-analytics-v83-${period}-${consultant}-${company}.csv`;
+    a.download = `zconnect-analytics-${period}-${consultant}-${company}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  const funnel = [
-    ["Busca", kpis.searches],
-    ["Visualizou", kpis.views],
-    ["Favorito", kpis.favorites],
-    ["Carrinho", kpis.carts],
-    ["WhatsApp", kpis.whats]
-  ];
+  async function handleReset() {
+    setResetStatus("");
+
+    if (!localResetAllowed()) {
+      setResetStatus("Reset permitido somente com PIN configurado ou em ambiente local/dev.");
+      return;
+    }
+
+    if (ADMIN_PIN && adminPin !== ADMIN_PIN) {
+      setResetStatus("PIN invalido.");
+      return;
+    }
+
+    const confirmed = window.confirm("Tem certeza que deseja apagar todos os dados de analytics?");
+    if (!confirmed) return;
+
+    try {
+      setResetStatus("Limpando eventos...");
+      await clearEvents(ADMIN_PIN ? adminPin : "");
+      setEvents([]);
+      setResetStatus("Dados limpos com sucesso.");
+      setStatus("Nenhum evento salvo no periodo.");
+      await load();
+    } catch (error) {
+      setResetStatus(error.message || "Nao foi possivel limpar os dados.");
+    }
+  }
 
   return (
     <main className="app">
       <section className="hero">
         <div>
-          <span className="eyebrow">Z Connect BI • Sprint V8.3</span>
-          <h1>Analytics por Empresa</h1>
-          <p>Jornada, carrinho abandonado, buscas e oportunidades por cliente sem login.</p>
+          <span className="eyebrow">Z Connect Analytics</span>
+          <h1>Go Live Analytics</h1>
+          <p>Eventos reais do catalogo publicado, agrupados por empresa, busca, produto e consultor.</p>
         </div>
         <div className="hero-actions">
           <button onClick={load} className="refresh"><RefreshCw size={17}/> Atualizar</button>
@@ -539,9 +445,9 @@ function App() {
       </section>
 
       <section className="toolbar compact-toolbar">
-        <div className="status">{usingSample ? "⚠️ " : "🟢 "}{status}</div>
-        <label><CalendarDays size={15}/> Período
-          <select value={period} onChange={e => setPeriod(e.target.value)}>
+        <div className="status">{status}</div>
+        <label><CalendarDays size={15}/> Periodo
+          <select value={period} onChange={(event) => setPeriod(event.target.value)}>
             <option value="today">Hoje</option>
             <option value="7d">7 dias</option>
             <option value="30d">30 dias</option>
@@ -549,166 +455,159 @@ function App() {
           </select>
         </label>
         <label><Filter size={15}/> Consultor
-          <select value={consultant} onChange={e => setConsultant(e.target.value)}>
-            {consultants.map(c => <option key={c} value={c}>{c === "all" ? "Todos" : c.toUpperCase()}</option>)}
+          <select value={consultant} onChange={(event) => setConsultant(event.target.value)}>
+            {consultants.map((item) => <option key={item} value={item}>{item === "all" ? "Todos" : item.toUpperCase()}</option>)}
           </select>
         </label>
         <label><Building2 size={15}/> Empresa
-          <select value={company} onChange={e => { setCompany(e.target.value); setActiveClient("all"); }}>
-            {companies.map(c => <option key={c} value={c}>{c === "all" ? "Todas" : c}</option>)}
+          <select value={company} onChange={(event) => setCompany(event.target.value)}>
+            {companies.map((item) => <option key={item} value={item}>{item === "all" ? "Todas" : item}</option>)}
           </select>
         </label>
       </section>
 
       <section className="kpi-grid">
-        <Kpi icon={<Building2/>} label="Empresas" value={kpis.companiesCount}/>
-        <Kpi icon={<Users/>} label="Clientes únicos" value={kpis.clients}/>
+        <Kpi icon={<Users/>} label="Acessos" value={kpis.pageViews}/>
         <Kpi icon={<Search/>} label="Buscas" value={kpis.searches}/>
-        <Kpi icon={<Eye/>} label="Vistos" value={kpis.views}/>
-        <Kpi icon={<ShoppingCart/>} label="Carrinho" value={kpis.carts}/>
-        <Kpi icon={<Send/>} label="WhatsApp" value={kpis.whats}/>
-        <Kpi icon={<TrendingUp/>} label="Conversão" value={percent(kpis.conversion)}/>
-        <Kpi icon={<Package/>} label="Ticket médio" value={money(kpis.ticket)}/>
-      </section>
-
-      <section className="spotlight-grid">
-        <Spotlight title="Empresa destaque" value={topCompany?.[0] || "—"} sub={`${topCompany?.[1] || 0} ações`} icon={<Building2/>}/>
-        <Spotlight title="Consultor campeão" value={topConsultant?.[0]?.toUpperCase() || "—"} sub={`${topConsultant?.[1] || 0} pedidos`} icon={<Trophy/>}/>
-        <Spotlight title="Produto campeão" value={topProduct?.[0] || "—"} sub={`${topProduct?.[1] || 0} envios`} icon={<Package/>}/>
-        <Spotlight title="Busca sem resultado" value={topMissing?.[0] || "—"} sub={`${topMissing?.[1] || 0} ocorrências`} icon={<AlertTriangle/>}/>
+        <Kpi icon={<AlertTriangle/>} label="Sem resultado" value={kpis.noResults}/>
+        <Kpi icon={<Eye/>} label="Produtos abertos" value={kpis.productOpen}/>
+        <Kpi icon={<ShoppingCart/>} label="Adicionados" value={kpis.added}/>
+        <Kpi icon={<XCircle/>} label="Removidos" value={kpis.removed}/>
+        <Kpi icon={<Trash2/>} label="Carrinhos limpos" value={kpis.cleared}/>
+        <Kpi icon={<Send/>} label="Cotacoes WhatsApp" value={kpis.quotes}/>
       </section>
 
       <section className="main-grid">
-        <article className="panel wide">
-          <div className="panel-head">
-            <h2><Building2 size={18}/> Empresas identificadas</h2>
-            <span>{clientRows.length} registros</span>
-          </div>
-          <div className="client-table">
-            <div className="client-head">
-              <span>Empresa</span><span>Consultor</span><span>Busca</span><span>Carrinho</span><span>WhatsApp</span><span>Última ação</span>
-            </div>
-            {clientRows.length ? clientRows.slice(0, 14).map(row => (
-              <button
-                key={row.key}
-                className={`client-row ${activeClient === row.key ? "active" : ""}`}
-                onClick={() => setActiveClient(activeClient === row.key ? "all" : row.key)}
-                title={row.clientId || row.companyName}
-              >
-                <strong>{row.companyName}</strong>
-                <span>{row.consultant.toUpperCase()}</span>
-                <b>{row.searches}</b>
-                <b>{row.carts}</b>
-                <b>{row.whats}</b>
-                <span>{dateTime(row.lastAt)}</span>
-              </button>
-            )) : <p className="empty">Nenhuma empresa no período.</p>}
-          </div>
-        </article>
-
         <article className="panel">
           <div className="panel-head">
-            <h2><ListChecks size={18}/> Jornada do cliente</h2>
-            <span>{activeClient === "all" ? "clique em uma empresa" : "últimas ações"}</span>
+            <h2><TrendingUp size={18}/> Funil</h2>
+            <span>Acesso ate cotacao</span>
           </div>
-          <div className="timeline">
-            {journey.length ? journey.map(event => (
-              <div className="timeline-row" key={`${event.id}-${event.createdAt}`}>
-                <i className={`dot ${event.event}`}/>
-                <div>
-                  <strong>{EVENT_LABELS[event.event] || event.event}</strong>
-                  <span>{eventTitle(event)}</span>
-                </div>
-                <time>{dateTime(event.createdAt)}</time>
-              </div>
-            )) : <p className="empty">Selecione uma empresa para ver a jornada.</p>}
+          <div className="heat funnel-compact">
+            {funnel.map(([label, value]) => {
+              const max = Math.max(1, funnel[0][1]);
+              return <div key={label} className="bar-row"><span>{label}</span><div><i style={{width:`${Math.max(4, Math.min(100, (value / max) * 100))}%`}}/></div><b>{value}</b></div>;
+            })}
           </div>
+        </article>
+
+        <article className="panel admin-panel">
+          <div className="panel-head">
+            <h2><Eraser size={18}/> Administracao</h2>
+            <span>Reset de dados</span>
+          </div>
+          <p className="admin-copy">Use apenas para limpar eventos de teste antes de iniciar uma nova rodada.</p>
+          {ADMIN_PIN ? (
+            <label className="admin-pin">PIN
+              <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" />
+            </label>
+          ) : null}
+          <button className="danger-button" type="button" onClick={handleReset} disabled={!localResetAllowed()}>
+            Limpar dados de teste
+          </button>
+          {resetStatus ? <small className="admin-status">{resetStatus}</small> : null}
+          {!ADMIN_PIN ? <small className="admin-status">Sem PIN configurado: reset liberado somente em local/dev.</small> : null}
         </article>
       </section>
 
+      <SectionTitle title="Empresas" />
       <section className="columns">
-        <Rank title="Ranking empresas" rows={companyRank} empty="Sem empresas"/>
-        <Rank title="Carrinho abandonado" customRows={cartAbandonRows} empty="Sem abandono identificado"/>
-        <Rank title="Buscas mais feitas" rows={searchRank} empty="Sem buscas"/>
-        <Rank title="Sem resultado" rows={noResultRank} empty="Sem buscas vazias"/>
+        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty="Sem eventos"/>
+        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty="Sem buscas"/>
+        <Rank title="Clientes que mais enviaram cotacoes" rows={companyQuoteRank} empty="Sem cotacoes"/>
+        <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotacoes WhatsApp`} icon={<Send/>}/>
+      </section>
+
+      <SectionTitle title="Buscas" />
+      <section className="columns">
+        <Rank title="Top buscas" rows={searchRank} empty="Sem buscas"/>
+        <Rank title="Buscas sem resultado" rows={noResultRank} empty="Sem buscas sem resultado"/>
+        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty="Sem buscas por empresa"/>
+        <RecentEvents events={byType.searches.slice(-10).reverse()} />
+      </section>
+
+      <SectionTitle title="Produtos" />
+      <section className="columns">
+        <Rank title="Mais abertos" rows={productOpenRank} empty="Sem produtos abertos"/>
+        <Rank title="Mais adicionados" rows={productAddedRank} empty="Sem produtos adicionados"/>
+        <Rank title="Mais removidos" rows={productRemovedRank} empty="Sem produtos removidos"/>
+        <Rank title="Mais cotados" rows={productQuotedRank} empty="Sem produtos cotados"/>
+      </section>
+
+      <SectionTitle title="Consultores" />
+      <section className="columns">
+        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty="Sem acessos"/>
+        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty="Sem buscas"/>
+        <Rank title="Cotacoes por consultor" rows={consultantQuoteRank} empty="Sem cotacoes"/>
+        <Rank title="Valor total cotado" rows={consultantValueRank} empty="Sem valores" formatValue={money}/>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h2><AlertTriangle size={18}/> Oportunidades comerciais</h2>
-          <span>prioridade por abandono, recorrência e sem resultado</span>
+          <h2><UserCheck size={18}/> Eventos recentes</h2>
+          <span>{filtered.length} eventos filtrados</span>
         </div>
-        <div className="opportunity-grid">
-          {opportunityRows.length ? opportunityRows.map((item, idx) => (
-            <div className="opportunity-card" key={`${item.companyName}-${item.type}-${item.text}-${idx}`}>
-              <div>
-                <span className={`badge ${item.type === "Carrinho abandonado" ? "hot" : item.type === "Sem resultado" ? "warn" : ""}`}>{item.type}</span>
-                <strong>{item.companyName}</strong>
-                <small>{item.text}</small>
-              </div>
-              <aside>
-                <b>{item.count}x</b>
-                <time>{dateTime(item.lastAt)}</time>
-                <em>{item.consultant.toUpperCase()}</em>
-              </aside>
+        <div className="event-table">
+          <div className="event-head">
+            <span>Hora</span><span>Evento</span><span>Empresa</span><span>Consultor</span><span>Detalhe</span>
+          </div>
+          {filtered.slice(-20).reverse().map((event) => (
+            <div className="event-row" key={`${event.id}-${event.timestamp}`}>
+              <span>{dateTime(event.timestamp)}</span>
+              <strong>{EVENT_LABELS[event.event] || event.event}</strong>
+              <span>{event.companyName}</span>
+              <span>{event.consultant.toUpperCase()}</span>
+              <span title={event.query || productLabel(productFromEvent(event))}>{event.query || productLabel(productFromEvent(event))}</span>
             </div>
-          )) : <p className="empty">Nenhuma oportunidade detectada no período.</p>}
+          ))}
+          {!filtered.length ? <p className="empty">Nenhum evento para os filtros atuais.</p> : null}
         </div>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2><TrendingUp size={18}/> Funil comercial</h2>
-          <span>Busca → Visualização → Favorito → Carrinho → WhatsApp</span>
-        </div>
-        <div className="heat funnel-compact">
-          {funnel.map(([label, value]) => {
-            const max = Math.max(1, funnel[0][1]);
-            return <div key={label} className="bar-row"><span>{label}</span><div><i style={{width:`${Math.max(4, Math.min(100, (value / max) * 100))}%`}}/></div><b>{value}</b></div>;
-          })}
-        </div>
-      </section>
-
-      <section className="columns two">
-        <Rank title="Produtos mais enviados" rows={productRank} empty="Sem produtos enviados"/>
-        <Rank title="Marcas no WhatsApp" rows={brandRank} empty="Sem marcas"/>
       </section>
     </main>
   );
+}
+
+function SectionTitle({ title }) {
+  return <h2 className="section-title">{title}</h2>;
 }
 
 function Kpi({ icon, label, value }) {
   return <article className="kpi"><div className="icon">{icon}</div><span>{label}</span><strong>{value}</strong></article>;
 }
 
-function Spotlight({ title, value, sub, icon }) {
+function ValueCard({ title, value, sub, icon }) {
   return <article className="spotlight"><div className="spot-icon">{icon}</div><span>{title}</span><strong>{value}</strong><p>{sub}</p></article>;
 }
 
-function Rank({ title, rows = [], customRows = null, empty }) {
+function Rank({ title, rows = [], empty, formatValue = (value) => value }) {
   return <article className="panel">
-    {title && <div className="panel-head"><h2>{title}</h2></div>}
+    <div className="panel-head"><h2>{title}</h2></div>
     <div className="rank">
-      {customRows ? (
-        customRows.length ? customRows.map((event, idx) => (
-          <div className="rank-row rich" key={`${event.id}-${idx}`}>
-            <span className="pos warn">{idx + 1}</span>
-            <strong title={`${event.companyName} • ${eventTitle(event)}`}>
-              {normalizeCompany(event.companyName)}
-              <small>{eventTitle(event)}</small>
-            </strong>
-            <b>{dateTime(event.createdAt)}</b>
+      {rows.length ? rows.slice(0, 10).map(([name, count], index) => (
+        <div className="rank-row" key={`${name}-${index}`}>
+          <span className="pos">{index + 1}</span>
+          <strong title={name}>{name || "-"}</strong>
+          <b>{formatValue(count)}</b>
+        </div>
+      )) : <p className="empty">{empty}</p>}
+    </div>
+  </article>;
+}
+
+function RecentEvents({ events }) {
+  return <article className="panel">
+    <div className="panel-head"><h2>Buscas recentes</h2></div>
+    <div className="timeline">
+      {events.length ? events.map((event) => (
+        <div className="timeline-row" key={`${event.id}-${event.timestamp}`}>
+          <i className={`dot ${event.event}`}/>
+          <div>
+            <strong>{event.companyName}</strong>
+            <span>{event.query || "Busca sem texto"}</span>
           </div>
-        )) : <p className="empty">{empty}</p>
-      ) : (
-        rows.length ? rows.slice(0, 10).map(([name, count], idx) => (
-          <div className="rank-row" key={`${name}-${idx}`}>
-            <span className="pos">{idx + 1}</span>
-            <strong title={name}>{name || "—"}</strong>
-            <b>{count}</b>
-          </div>
-        )) : <p className="empty">{empty}</p>
-      )}
+          <time>{dateTime(event.timestamp)}</time>
+        </div>
+      )) : <p className="empty">Sem buscas recentes.</p>}
     </div>
   </article>;
 }

@@ -2,8 +2,13 @@ const EVENTS_SHEET = "EVENTS";
 
 const EVENT_HEADERS = [
   "createdAt",
+  "timestamp",
   "event",
+  "consultant",
   "consultor",
+  "companyName",
+  "empresa",
+  "company",
   "query",
   "productCode",
   "productName",
@@ -11,14 +16,15 @@ const EVENT_HEADERS = [
   "price",
   "quantity",
   "total",
+  "itemsCount",
+  "cartTotal",
+  "products",
   "page",
+  "referrer",
   "userAgent",
   "sessionId",
   "eventId",
   "clientId",
-  "companyName",
-  "empresa",
-  "company",
   "searchTimeMs",
   "resultsCount"
 ];
@@ -76,9 +82,32 @@ function normalizeCompany_(data) {
   return String(data.companyName || data.empresa || data.company || data.cliente || data.clientName || "").trim();
 }
 
+function normalizeEvent_(value) {
+  const event = String(value || "").trim();
+  const aliases = {
+    view_product: "product_open",
+    search_no_result: "search_no_results",
+    sem_resultado: "search_no_results",
+    whatsapp_checkout: "whatsapp_quote",
+    whatsapp_order: "whatsapp_quote"
+  };
+
+  return aliases[event] || event;
+}
+
 function number_(value) {
   if (typeof value === "number") return value;
   return Number(String(value || "0").replace(/\./g, "").replace(",", ".")) || 0;
+}
+
+function serializeProducts_(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    return String(value);
+  }
 }
 
 function getHeaders_(sheet) {
@@ -91,19 +120,31 @@ function appendEvent_(data) {
   const consultor = normalizeConsultor_(data.consultor || data.consultant || data.consultant_slug);
   const companyName = normalizeCompany_(data);
   const clientId = data.clientId || data.clienteId || data.customerId || data.sessionId || "";
+  const event = normalizeEvent_(data.event);
+  const timestamp = data.timestamp || data.createdAt || new Date().toISOString();
+  const total = number_(data.total || data.cart_total || data.cartTotal || 0);
+  const quantity = number_(data.quantity || data.quantidade || data.itemsCount || 0);
+  const itemsCount = number_(data.itemsCount || data.itemCount || data.quantity || data.quantidade || 0);
+  const cartTotal = number_(data.cartTotal || data.cart_total || data.total || 0);
 
   const record = {
-    createdAt: data.createdAt ? new Date(data.createdAt) : new Date(),
-    event: data.event || "",
+    createdAt: timestamp ? new Date(timestamp) : new Date(),
+    timestamp: timestamp,
+    event: event,
+    consultant: consultor,
     consultor: consultor,
     query: data.query || data.busca || "",
     productCode: data.productCode || data.codigo || data.product_code || "",
     productName: data.productName || data.descricao || data.product_name || "",
     brand: data.brand || data.marca || data.fabricante || "",
     price: number_(data.price || data.preco || 0),
-    quantity: number_(data.quantity || data.quantidade || 0),
-    total: number_(data.total || data.cart_total || 0),
+    quantity: quantity,
+    total: total,
+    itemsCount: itemsCount,
+    cartTotal: cartTotal,
+    products: serializeProducts_(data.products || data.items || data.productList || ""),
     page: data.page || "",
+    referrer: data.referrer || "",
     userAgent: data.userAgent || "",
     sessionId: data.sessionId || "",
     eventId: data.eventId || "",
@@ -136,8 +177,12 @@ function readEvents_() {
     });
 
     item.consultant = item.consultant || item.consultor || "";
+    item.event = normalizeEvent_(item.event);
+    item.timestamp = item.timestamp || item.createdAt || "";
     item.companyName = item.companyName || item.empresa || item.company || "";
     item.clientId = item.clientId || item.clienteId || item.sessionId || "";
+    item.itemsCount = item.itemsCount || item.quantity || "";
+    item.cartTotal = item.cartTotal || item.total || "";
 
     return item;
   });
@@ -164,10 +209,10 @@ function getSummary_() {
     }
 
     if (event.event === "search") companies[company].searches++;
-    if (event.event === "view_product") companies[company].views++;
+    if (event.event === "product_open") companies[company].views++;
     if (event.event === "add_to_cart") companies[company].carts++;
-    if (event.event === "whatsapp_checkout") companies[company].whats++;
-    if (event.event === "sem_resultado" || event.event === "search_no_result") companies[company].noResult++;
+    if (event.event === "whatsapp_quote") companies[company].whats++;
+    if (event.event === "search_no_results") companies[company].noResult++;
 
     if (new Date(event.createdAt) > new Date(companies[company].lastAt)) {
       companies[company].lastAt = event.createdAt;
@@ -181,11 +226,27 @@ function getSummary_() {
   };
 }
 
+function clearEvents_(data) {
+  const configuredPin = String(PropertiesService.getScriptProperties().getProperty("ANALYTICS_ADMIN_PIN") || "").trim();
+  const requestedPin = String(data.pin || data.adminPin || data.admin_pin || "").trim();
+
+  if (configuredPin && requestedPin !== configuredPin) {
+    return { ok: false, error: "invalid_pin" };
+  }
+
+  const sheet = getEventsSheet_();
+  sheet.clearContents();
+  sheet.appendRow(EVENT_HEADERS);
+
+  return { ok: true, cleared: true };
+}
+
 function doPost(e) {
   const data = parseBody_(e);
   const action = data.action || "track";
 
   if (action === "track") return jsonOutput(appendEvent_(data));
+  if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
 }
@@ -195,6 +256,7 @@ function doGet(e) {
 
   if (action === "events") return jsonOutput(readEvents_());
   if (action === "summary") return jsonOutput(getSummary_());
+  if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(e.parameter || {}));
 
   if (action === "track") {
     const params = e.parameter || {};
