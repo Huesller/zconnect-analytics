@@ -1051,3 +1051,49 @@ input:focus {
     grid-template-columns: 1fr;
   }
 }
+
+
+.primary-export {
+  border-color: rgba(60, 193, 126, 0.5);
+  background: linear-gradient(135deg, rgba(60, 193, 126, 0.18), rgba(92, 141, 246, 0.12));
+}
+
+.primary-export:hover,
+.primary-export:focus-visible {
+  border-color: var(--green);
+  color: #b8f7d7;
+}
+
+.modal-export {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 11px;
+  background: var(--surface-raised);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.modal-export:hover,
+.modal-export:focus-visible {
+  border-color: var(--green);
+  color: #b8f7d7;
+  outline: none;
+}
+
+@media (max-width: 680px) {
+  .modal-summary {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .modal-export {
+    width: 100%;
+  }
+}

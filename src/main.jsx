@@ -623,6 +623,138 @@ function noResultDemandRows(events) {
 }
 
 
+function periodLabel(value) {
+  const labels = {
+    today: "Hoje",
+    "7d": "Últimos 7 dias",
+    "30d": "Últimos 30 dias",
+    all: "Tudo"
+  };
+  return labels[value] || value;
+}
+
+function fileDateStamp() {
+  const d = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+}
+
+function slugifyFilePart(value) {
+  return String(value || "todos")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "todos";
+}
+
+function csvEscape(value) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
+function downloadBlob(content, fileName, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportRowsCsv({ fileName, columns, rows }) {
+  const header = columns.map((column) => column.label);
+  const body = rows.map((row) => columns.map((column) => csvEscape(row[column.key] ?? "")).join(";"));
+  downloadBlob(["\ufeff" + header.map(csvEscape).join(";"), ...body].join("\n"), fileName, "text/csv;charset=utf-8");
+}
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function excelCell(value, styleId = "") {
+  const raw = value ?? "";
+  const numeric = typeof raw === "number" && Number.isFinite(raw);
+  const type = numeric ? "Number" : "String";
+  const style = styleId ? ` ss:StyleID="${styleId}"` : "";
+  return `<Cell${style}><Data ss:Type="${type}">${xmlEscape(raw)}</Data></Cell>`;
+}
+
+function excelRow(values, styleId = "") {
+  return `<Row>${values.map((value) => excelCell(value, styleId)).join("")}</Row>`;
+}
+
+function excelSheet(sheet) {
+  const safeName = String(sheet.name || "Planilha").slice(0, 31).replace(/[\\/?*[\]:]/g, " ");
+  return `<Worksheet ss:Name="${xmlEscape(safeName)}"><Table>${sheet.rows.map((row) => excelRow(row.values, row.styleId)).join("")}</Table></Worksheet>`;
+}
+
+function buildExcelWorkbook(sheets) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="title"><Font ss:Bold="1" ss:Size="16"/><Interior ss:Color="#1f2937" ss:Pattern="Solid"/><Font ss:Color="#FFFFFF" ss:Bold="1" ss:Size="16"/></Style>
+  <Style ss:ID="subtitle"><Font ss:Bold="1"/><Interior ss:Color="#e5e7eb" ss:Pattern="Solid"/></Style>
+  <Style ss:ID="header"><Font ss:Bold="1"/><Interior ss:Color="#d1d5db" ss:Pattern="Solid"/></Style>
+ </Styles>
+ ${sheets.map(excelSheet).join("")}
+</Workbook>`;
+}
+
+function sheetTitle(title, subtitle = "") {
+  const rows = [{ values: [title], styleId: "title" }];
+  if (subtitle) rows.push({ values: [subtitle], styleId: "subtitle" });
+  rows.push({ values: [] });
+  return rows;
+}
+
+function tableRows(title, columns, rows) {
+  return [
+    ...sheetTitle(title),
+    { values: columns.map((column) => column.label), styleId: "header" },
+    ...rows.map((row) => ({ values: columns.map((column) => row[column.key] ?? "") }))
+  ];
+}
+
+function rawEventRows(events) {
+  const columns = [
+    { key: "timestamp", label: "Timestamp" },
+    { key: "event", label: "Evento" },
+    { key: "companyName", label: "Empresa" },
+    { key: "consultant", label: "Consultor" },
+    { key: "query", label: "Busca" },
+    { key: "productCode", label: "Código" },
+    { key: "productName", label: "Produto" },
+    { key: "brand", label: "Marca" },
+    { key: "quantity", label: "Qtd." },
+    { key: "price", label: "Preço" },
+    { key: "itemsCount", label: "Itens" },
+    { key: "cartTotal", label: "Valor cotado" }
+  ];
+
+  return {
+    columns,
+    rows: events.map((event) => ({
+      ...event,
+      event: EVENT_LABELS[event.event] || event.event,
+      companyName: normalizeCompany(event.companyName),
+      consultant: normalizeConsultant(event.consultant).toUpperCase(),
+      timestamp: dateTime(event.timestamp),
+      productName: productLabel(productFromEvent(event)) === "Produto não informado" ? "" : productLabel(productFromEvent(event)),
+      cartTotal: event.cartTotal || event.total ? money(event.cartTotal || event.total) : ""
+    }))
+  };
+}
+
+
 function sortEventsDesc(events) {
   return [...events].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }
@@ -1204,34 +1336,86 @@ function App() {
     });
   }
 
-  function exportCsv() {
-    const header = [
-      "timestamp",
-      "event",
-      "companyName",
-      "consultant",
-      "query",
-      "productCode",
-      "productName",
-      "brand",
-      "quantity",
-      "price",
-      "itemsCount",
-      "cartTotal",
-      "products"
+  function exportRawCsv() {
+    const raw = rawEventRows(filtered);
+    exportRowsCsv({
+      fileName: `zconnect-eventos-brutos-${period}-${slugifyFilePart(consultant)}-${slugifyFilePart(company)}-${fileDateStamp()}.csv`,
+      columns: raw.columns,
+      rows: raw.rows
+    });
+    showToast("CSV bruto exportado.");
+  }
+
+  function exportExecutiveReport() {
+    const selectedCompany = company === "all" ? "Todas" : company;
+    const selectedConsultant = consultant === "all" ? "Todos" : consultant.toUpperCase();
+    const nonAnonymousCompanies = companyActivity.filter((row) => !isAnonymousCompany(row.company));
+    const topCompany = nonAnonymousCompanies[0];
+    const topConsultant = consultantActivity[0];
+    const topProduct = commercialProducts[0];
+    const topNoResult = noResultDemand[0];
+    const raw = rawEventRows(filtered);
+
+    const summaryRows = [
+      ...sheetTitle("Z Connect - Relatório Executivo", "Relatório gerado automaticamente pelo dashboard Analytics."),
+      { values: ["Gerado em", dateTime(new Date())] },
+      { values: ["Período", periodLabel(period)] },
+      { values: ["Consultor", selectedConsultant] },
+      { values: ["Empresa", selectedCompany] },
+      { values: ["Eventos considerados", filtered.length] },
+      { values: [] },
+      { values: ["Indicador", "Valor"], styleId: "header" },
+      { values: ["Acessos", kpis.pageViews] },
+      { values: ["Buscas", kpis.searches] },
+      { values: ["Buscas sem resultado", kpis.noResults] },
+      { values: ["Produtos abertos", kpis.productOpen] },
+      { values: ["Adicionados ao carrinho", kpis.added] },
+      { values: ["Cotações WhatsApp", kpis.quotes] },
+      { values: ["Valor cotado", money(kpis.quoteTotal)] },
+      { values: ["Taxa busca/acesso", kpis.pageViews ? percent(kpis.searches / kpis.pageViews) : "0%"] },
+      { values: ["Taxa cotação/produto aberto", kpis.productOpen ? percent(kpis.quotes / kpis.productOpen) : "0%"] },
+      { values: [] },
+      { values: ["Destaques", "Valor", "Detalhe"], styleId: "header" },
+      { values: ["Cliente mais quente", topCompany?.company || "-", topCompany ? `${topCompany.score} pontos / ${topCompany.quotes} cotações` : "-"] },
+      { values: ["Consultor destaque", topConsultant?.consultant || "-", topConsultant ? `${topConsultant.score} pontos / ${topConsultant.quotes} cotações` : "-"] },
+      { values: ["Produto mais quente", topProduct?.product || "-", topProduct ? `${topProduct.score} pontos / ${topProduct.quotes} cotações` : "-"] },
+      { values: ["Maior demanda sem resultado", topNoResult?.search || "-", topNoResult ? `${topNoResult.count} ocorrências` : "-"] }
     ];
-    const rows = filtered.map((event) => header.map((key) => {
-      const value = key === "products" ? JSON.stringify(event.products || []) : event[key];
-      return `"${String(value ?? "").replace(/"/g, '""')}"`;
-    }).join(";"));
-    const csv = [header.join(";"), ...rows].join("\n");
-    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `zconnect-analytics-${period}-${consultant}-${company}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+
+    const chartDataRows = [
+      ...sheetTitle("Dados para gráficos", "Base pronta para criar gráficos no Excel."),
+      { values: ["Funil", "Quantidade"], styleId: "header" },
+      ...funnel.map(([label, value]) => ({ values: [label, value] })),
+      { values: [] },
+      { values: ["Top 10 produtos quentes", "Score"], styleId: "header" },
+      ...commercialProducts.slice(0, 10).map((row) => ({ values: [row.product, row.score] })),
+      { values: [] },
+      { values: ["Top 10 empresas", "Score"], styleId: "header" },
+      ...nonAnonymousCompanies.slice(0, 10).map((row) => ({ values: [row.company, row.score] })),
+      { values: [] },
+      { values: ["Top 10 consultores", "Score"], styleId: "header" },
+      ...consultantActivity.slice(0, 10).map((row) => ({ values: [row.consultant, row.score] }))
+    ];
+
+    const sheets = [
+      { name: "Resumo Executivo", rows: summaryRows },
+      { name: "Produtos Quentes", rows: tableRows("Produtos Mais Quentes", HOT_PRODUCT_COLUMNS, commercialProducts) },
+      { name: "Produtos Cotados", rows: tableRows("Produtos Mais Cotados", QUOTED_PRODUCT_COLUMNS, quotedProductRows(commercialProducts)) },
+      { name: "Demandas Sem Resultado", rows: tableRows("Demandas Sem Resultado", NO_RESULT_DEMAND_COLUMNS, noResultDemandRows(byType.noResults)) },
+      { name: "Empresas", rows: tableRows("Ranking Comercial de Empresas", COMPANY_ACTIVITY_COLUMNS, nonAnonymousCompanies) },
+      { name: "Consultores", rows: tableRows("Ranking Comercial de Consultores", CONSULTANT_ACTIVITY_COLUMNS, consultantActivity) },
+      { name: "Empresas Adormecidas", rows: tableRows("Empresas Adormecidas", DORMANT_COMPANY_COLUMNS, dormantCompanyRows(activityScope)) },
+      { name: "Dados Graficos", rows: chartDataRows },
+      { name: "Eventos Brutos", rows: tableRows("Eventos Brutos", raw.columns, raw.rows) }
+    ];
+
+    const workbook = buildExcelWorkbook(sheets);
+    downloadBlob(
+      workbook,
+      `zconnect-relatorio-executivo-${period}-${slugifyFilePart(consultant)}-${slugifyFilePart(company)}-${fileDateStamp()}.xls`,
+      "application/vnd.ms-excel;charset=utf-8"
+    );
+    showToast("Relatório executivo exportado.");
   }
 
   async function handleReset() {
@@ -1284,7 +1468,8 @@ function App() {
           <button onClick={() => load()} className="refresh" disabled={isLoading || isResetting}>
             <RefreshCw className={isLoading ? "spin" : undefined} size={17}/> {isLoading ? "Atualizando..." : "Atualizar"}
           </button>
-          <button onClick={exportCsv} className="refresh"><Download size={17}/> CSV</button>
+          <button onClick={exportExecutiveReport} className="refresh primary-export"><Download size={17}/> Relatório executivo</button>
+          <button onClick={exportRawCsv} className="refresh"><Download size={17}/> CSV bruto</button>
         </div>
       </section>
 
@@ -1666,6 +1851,17 @@ function HistoryModal({ modal, onClose }) {
         <div className="modal-summary">
           <strong>{modal.totalLabel || `${modal.rows.length} registros`}</strong>
           <span>{visibleRows.length} na lista filtrada</span>
+          <button
+            type="button"
+            className="modal-export"
+            onClick={() => exportRowsCsv({
+              fileName: `zconnect-${slugifyFilePart(modal.title)}-${fileDateStamp()}.csv`,
+              columns: modal.columns,
+              rows: visibleRows
+            })}
+          >
+            <Download size={15}/> Exportar lista
+          </button>
         </div>
 
         <div className="modal-filters">
