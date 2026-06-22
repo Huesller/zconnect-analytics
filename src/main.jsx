@@ -5,6 +5,7 @@ import {
   Building2,
   CalendarDays,
   Download,
+  Flame,
   Eraser,
   Eye,
   Filter,
@@ -99,6 +100,36 @@ const CONSULTANT_ACTIVITY_COLUMNS = [
   { key: "quotes", label: "Cotações", className: "col-metric" },
   { key: "quoteTotal", label: "Valor cotado", className: "col-value" },
   { key: "lastEvent", label: "Último evento", className: "col-time" }
+];
+
+const HOT_PRODUCT_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "product", label: "Produto", className: "col-product-wide" },
+  { key: "views", label: "Aberturas", className: "col-metric" },
+  { key: "carts", label: "Carrinhos", className: "col-metric" },
+  { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "conversion", label: "Conversão", className: "col-metric" },
+  { key: "lastEvent", label: "Último sinal", className: "col-time" }
+];
+
+const QUOTED_PRODUCT_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "product", label: "Produto", className: "col-product-wide" },
+  { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "carts", label: "Carrinhos", className: "col-metric" },
+  { key: "views", label: "Aberturas", className: "col-metric" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "conversion", label: "Conversão", className: "col-metric" }
+];
+
+const NO_RESULT_DEMAND_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "search", label: "Termo pesquisado", className: "col-search-wide" },
+  { key: "count", label: "Ocorrências", className: "col-metric" },
+  { key: "companies", label: "Empresas", className: "col-metric" },
+  { key: "consultants", label: "Consultores", className: "col-metric" },
+  { key: "lastEvent", label: "Última busca", className: "col-time" }
 ];
 
 function normalizeEvent(value) {
@@ -388,6 +419,141 @@ function productRank(events, options = {}) {
   return [...map.entries()].sort((a, b) => b[1] - a[1]);
 }
 
+function updateProductMetric(map, label, event, field, weight = 1) {
+  if (!label || label === "Produto não informado") return;
+
+  if (!map.has(label)) {
+    map.set(label, {
+      product: label,
+      views: 0,
+      carts: 0,
+      quotes: 0,
+      score: 0,
+      lastEventDate: null
+    });
+  }
+
+  const row = map.get(label);
+  row[field] += weight;
+
+  const currentDate = new Date(event.timestamp);
+  if (!Number.isNaN(currentDate.getTime()) && (!row.lastEventDate || currentDate > row.lastEventDate)) {
+    row.lastEventDate = currentDate;
+  }
+}
+
+function commercialProductRows({ productOpen = [], added = [], quotes = [] }) {
+  const map = new Map();
+
+  productOpen.forEach((event) => {
+    updateProductMetric(map, productLabel(productFromEvent(event)), event, "views", 1);
+  });
+
+  added.forEach((event) => {
+    const product = productFromEvent(event);
+    updateProductMetric(map, productLabel(product), event, "carts", productQuantity(product, event.quantity || 1));
+  });
+
+  quotes.forEach((event) => {
+    quoteProducts(event).forEach((product) => {
+      updateProductMetric(map, productLabel(product), event, "quotes", productQuantity(product, 1));
+    });
+  });
+
+  return [...map.values()]
+    .map((row) => {
+      const score = row.views + (row.carts * 3) + (row.quotes * 10);
+      const conversionRate = row.views ? row.quotes / row.views : 0;
+      return {
+        ...row,
+        score,
+        conversionRate,
+        conversion: row.views ? `${(conversionRate * 100).toFixed(1).replace(".", ",")}%` : "-",
+        lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
+        _search: ""
+      };
+    })
+    .sort((a, b) => b.score - a.score || b.quotes - a.quotes || b.carts - a.carts || b.views - a.views)
+    .map((row, index) => {
+      const formatted = { ...row, position: index + 1 };
+      formatted._search = [
+        formatted.position,
+        formatted.product,
+        formatted.views,
+        formatted.carts,
+        formatted.quotes,
+        formatted.score,
+        formatted.conversion,
+        formatted.lastEvent
+      ].join(" ").toLowerCase();
+      return formatted;
+    });
+}
+
+function quotedProductRows(rows) {
+  return [...rows]
+    .filter((row) => row.quotes > 0)
+    .sort((a, b) => b.quotes - a.quotes || b.score - a.score)
+    .map((row, index) => ({ ...row, position: index + 1 }));
+}
+
+function noResultDemandRows(events) {
+  const map = new Map();
+
+  events.forEach((event) => {
+    const query = String(event.query || "").trim();
+    if (!query) return;
+    const key = query.toLowerCase();
+
+    if (!map.has(key)) {
+      map.set(key, {
+        search: query,
+        count: 0,
+        companiesSet: new Set(),
+        consultantsSet: new Set(),
+        lastEventDate: null
+      });
+    }
+
+    const row = map.get(key);
+    row.count += 1;
+    row.companiesSet.add(normalizeCompany(event.companyName));
+    row.consultantsSet.add(normalizeConsultant(event.consultant).toUpperCase());
+
+    const currentDate = new Date(event.timestamp);
+    if (!Number.isNaN(currentDate.getTime()) && (!row.lastEventDate || currentDate > row.lastEventDate)) {
+      row.lastEventDate = currentDate;
+    }
+  });
+
+  return [...map.values()]
+    .sort((a, b) => b.count - a.count)
+    .map((row, index) => {
+      const companies = row.companiesSet.size;
+      const consultants = row.consultantsSet.size;
+      const formatted = {
+        id: `no-result-${index}-${row.search}`,
+        position: index + 1,
+        search: row.search,
+        count: row.count,
+        companies,
+        consultants,
+        lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
+        _search: ""
+      };
+      formatted._search = [
+        formatted.position,
+        formatted.search,
+        formatted.count,
+        formatted.companies,
+        formatted.consultants,
+        formatted.lastEvent
+      ].join(" ").toLowerCase();
+      return formatted;
+    });
+}
+
+
 function sortEventsDesc(events) {
   return [...events].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 }
@@ -669,6 +835,15 @@ function App() {
   const productRemovedRank = useMemo(() => productRank(byType.removed, { weightQuantity: true }), [byType.removed]);
   const productQuotedRank = useMemo(() => productRank(byType.quotes, { expandQuotes: true, weightQuantity: true }), [byType.quotes]);
 
+  const commercialProducts = useMemo(() => commercialProductRows({
+    productOpen: byType.productOpen,
+    added: byType.added,
+    quotes: byType.quotes
+  }), [byType.productOpen, byType.added, byType.quotes]);
+  const hotProducts = useMemo(() => commercialProducts.slice(0, 20), [commercialProducts]);
+  const quotedProducts = useMemo(() => quotedProductRows(commercialProducts).slice(0, 20), [commercialProducts]);
+  const noResultDemand = useMemo(() => noResultDemandRows(byType.noResults).slice(0, 50), [byType.noResults]);
+
   const consultantAccessRank = useMemo(() => countBy(byType.pageViews, (event) => normalizeConsultant(event.consultant)), [byType.pageViews]);
   const consultantSearchRank = useMemo(() => countBy(allSearchEvents, (event) => normalizeConsultant(event.consultant)), [allSearchEvents]);
   const consultantQuoteRank = useMemo(() => countBy(byType.quotes, (event) => normalizeConsultant(event.consultant)), [byType.quotes]);
@@ -735,6 +910,41 @@ function App() {
       totalLabel: `${filtered.length} ações em ${consultantActivity.length} consultor${consultantActivity.length === 1 ? "" : "es"}`,
       rows: consultantActivity,
       columns: CONSULTANT_ACTIVITY_COLUMNS,
+      filters: { company: false, consultant: false }
+    });
+  }
+
+  function openHotProductsModal() {
+    openModal({
+      title: "Produtos mais quentes",
+      description: "Score comercial: produto aberto ×1, adicionado ao carrinho ×3 e cotação WhatsApp ×10.",
+      totalLabel: `${commercialProducts.length} produto${commercialProducts.length === 1 ? "" : "s"} com sinal comercial`,
+      rows: commercialProducts,
+      columns: HOT_PRODUCT_COLUMNS,
+      filters: { company: false, consultant: false }
+    });
+  }
+
+  function openQuotedProductsModal() {
+    const rows = quotedProductRows(commercialProducts);
+    openModal({
+      title: "Produtos mais cotados",
+      description: "Ranking dos itens com maior quantidade em cotações WhatsApp dentro dos filtros atuais.",
+      totalLabel: `${rows.length} produto${rows.length === 1 ? "" : "s"} cotado${rows.length === 1 ? "" : "s"}`,
+      rows,
+      columns: QUOTED_PRODUCT_COLUMNS,
+      filters: { company: false, consultant: false }
+    });
+  }
+
+  function openNoResultDemandModal() {
+    const rows = noResultDemandRows(byType.noResults);
+    openModal({
+      title: "Demandas sem resultado",
+      description: "Termos pesquisados que não retornaram produto. Útil para compra, cadastro e ajuste de busca.",
+      totalLabel: `${rows.length} termo${rows.length === 1 ? "" : "s"} sem resultado`,
+      rows,
+      columns: NO_RESULT_DEMAND_COLUMNS,
       filters: { company: false, consultant: false }
     });
   }
@@ -895,6 +1105,37 @@ function App() {
         <RecentEvents events={sortEventsDesc(allSearchEvents).slice(0, 10)} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas recentes", allSearchEvents)} />
       </section>
 
+      <SectionTitle title="Inteligência comercial P1.1" subtitle="Ranking de demanda, cotação e oportunidades de compra" />
+      <section className="commercial-grid">
+        <MetricTable
+          title="Produtos mais quentes"
+          subtitle="Score = aberturas + carrinhos×3 + cotações×10"
+          rows={hotProducts}
+          columns={HOT_PRODUCT_COLUMNS.slice(1, 6)}
+          empty={EMPTY_LIST_MESSAGE}
+          icon={<Flame size={18}/>}
+          onOpen={openHotProductsModal}
+        />
+        <MetricTable
+          title="Produtos mais cotados"
+          subtitle="Itens com maior sinal comercial via WhatsApp"
+          rows={quotedProducts}
+          columns={QUOTED_PRODUCT_COLUMNS.slice(1, 4)}
+          empty={EMPTY_LIST_MESSAGE}
+          icon={<Send size={18}/>}
+          onOpen={openQuotedProductsModal}
+        />
+        <MetricTable
+          title="Demandas sem resultado"
+          subtitle="Buscas que viraram oportunidade de estoque/cadastro"
+          rows={noResultDemand.slice(0, 20)}
+          columns={NO_RESULT_DEMAND_COLUMNS.slice(1, 4)}
+          empty={EMPTY_LIST_MESSAGE}
+          icon={<AlertTriangle size={18}/>}
+          onOpen={openNoResultDemandModal}
+        />
+      </section>
+
       <SectionTitle title="Produtos" subtitle="Interesse, carrinho e itens cotados" />
       <section className="columns">
         <Rank title="Produtos mais abertos" rows={productOpenRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
@@ -1027,6 +1268,31 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
     </article>
   );
 }
+
+function MetricTable({ title, subtitle, rows = [], columns = [], empty = EMPTY_LIST_MESSAGE, icon, onOpen }) {
+  return (
+    <article className={`panel metric-panel ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
+      <div className="panel-head">
+        <h2>{icon}{title}</h2>
+        <span>{rows.length ? `${rows.length} itens` : ""}</span>
+      </div>
+      {subtitle ? <p className="panel-subtitle">{subtitle}</p> : null}
+      <div className="metric-list">
+        {rows.length ? rows.slice(0, 10).map((row, index) => (
+          <div className="metric-row" key={row.id || row.product || row.search || index}>
+            <span className="pos">{row.position || index + 1}</span>
+            {columns.map((column) => (
+              <span key={column.key} className={`metric-cell ${column.key === "product" || column.key === "search" ? "metric-name" : ""}`} title={String(row[column.key] ?? "-")}>
+                {row[column.key] ?? "-"}
+              </span>
+            ))}
+          </div>
+        )) : <p className="empty">{empty}</p>}
+      </div>
+    </article>
+  );
+}
+
 
 function RecentEvents({ events, title = "Buscas recentes", empty = EMPTY_LIST_MESSAGE, detailFn = (event) => event.query || "Busca sem texto", onOpen }) {
   return (

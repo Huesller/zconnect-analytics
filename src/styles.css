@@ -791,9 +791,71 @@ input:focus {
   padding: 18px;
 }
 
+
+
+.commercial-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.metric-panel {
+  min-height: 100%;
+}
+
+.panel-subtitle {
+  margin: -4px 18px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.metric-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 0 12px 14px;
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) repeat(4, minmax(58px, auto));
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.metric-cell {
+  min-width: 0;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 900;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.metric-name {
+  color: var(--text);
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.metric-row .pos {
+  width: 26px;
+  height: 26px;
+}
+
+
 @media (max-width: 1180px) {
   .kpi-grid,
-  .columns {
+  .columns,
+  .commercial-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -856,8 +918,17 @@ input:focus {
   }
 
   .kpi-grid,
-  .columns {
+  .columns,
+  .commercial-grid {
     grid-template-columns: 1fr;
+  }
+
+  .metric-row {
+    grid-template-columns: 30px minmax(0, 1fr) repeat(2, minmax(44px, auto));
+  }
+
+  .metric-cell:nth-child(n+5) {
+    display: none;
   }
 
   .bar-row {
