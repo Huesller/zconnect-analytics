@@ -81,23 +81,30 @@ const QUOTE_HISTORY_COLUMNS = [
 ];
 
 const COMPANY_ACTIVITY_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
   { key: "company", label: "Empresa", className: "col-company-wide" },
-  { key: "totalActions", label: "Total de ações", className: "col-metric" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "totalActions", label: "Ações", className: "col-metric" },
+  { key: "accesses", label: "Acessos", className: "col-metric" },
   { key: "searches", label: "Buscas", className: "col-metric" },
   { key: "productOpen", label: "Produtos abertos", className: "col-metric" },
   { key: "added", label: "Adicionados", className: "col-metric" },
   { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "quoteRate", label: "Conversão", className: "col-metric" },
   { key: "quoteTotal", label: "Valor cotado", className: "col-value" },
   { key: "lastEvent", label: "Último evento", className: "col-time" }
 ];
 
 const CONSULTANT_ACTIVITY_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
   { key: "consultant", label: "Consultor", className: "col-company-wide" },
-  { key: "totalActions", label: "Total de ações", className: "col-metric" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "totalActions", label: "Ações", className: "col-metric" },
   { key: "accesses", label: "Acessos", className: "col-metric" },
   { key: "searches", label: "Buscas", className: "col-metric" },
   { key: "productOpen", label: "Produtos abertos", className: "col-metric" },
   { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "quoteRate", label: "Conversão", className: "col-metric" },
   { key: "quoteTotal", label: "Valor cotado", className: "col-value" },
   { key: "lastEvent", label: "Último evento", className: "col-time" }
 ];
@@ -128,8 +135,43 @@ const NO_RESULT_DEMAND_COLUMNS = [
   { key: "search", label: "Termo pesquisado", className: "col-search-wide" },
   { key: "count", label: "Ocorrências", className: "col-metric" },
   { key: "companies", label: "Empresas", className: "col-metric" },
+  { key: "companyList", label: "Empresas interessadas", className: "col-company-wide" },
   { key: "consultants", label: "Consultores", className: "col-metric" },
   { key: "lastEvent", label: "Última busca", className: "col-time" }
+];
+
+const COMPANY_COMMERCIAL_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "company", label: "Empresa", className: "col-company-wide" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "searches", label: "Buscas", className: "col-metric" },
+  { key: "productOpen", label: "Produtos", className: "col-metric" },
+  { key: "quoteRate", label: "Conv.", className: "col-metric" },
+  { key: "lastEvent", label: "Último evento", className: "col-time" }
+];
+
+const CONSULTANT_COMMERCIAL_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "consultant", label: "Consultor", className: "col-company-wide" },
+  { key: "score", label: "Score", className: "col-metric" },
+  { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "accesses", label: "Acessos", className: "col-metric" },
+  { key: "searches", label: "Buscas", className: "col-metric" },
+  { key: "quoteRate", label: "Conv.", className: "col-metric" },
+  { key: "quoteTotal", label: "Valor", className: "col-value" }
+];
+
+const DORMANT_COMPANY_COLUMNS = [
+  { key: "position", label: "#", className: "col-qty" },
+  { key: "company", label: "Empresa", className: "col-company-wide" },
+  { key: "status", label: "Status", className: "col-event" },
+  { key: "previousScore", label: "Score anterior", className: "col-metric" },
+  { key: "currentScore", label: "Score atual", className: "col-metric" },
+  { key: "drop", label: "Queda", className: "col-metric" },
+  { key: "previousQuotes", label: "Cotações ant.", className: "col-metric" },
+  { key: "currentQuotes", label: "Cotações atuais", className: "col-metric" },
+  { key: "lastEvent", label: "Último evento", className: "col-time" }
 ];
 
 function normalizeEvent(value) {
@@ -146,6 +188,31 @@ function normalizeConsultant(value) {
 function normalizeCompany(value) {
   const company = String(value || "").trim();
   return company || "Empresa não informada";
+}
+
+function isAnonymousCompany(value) {
+  const company = normalizeCompany(value).toLowerCase();
+  return company === "não identificado" ||
+    company === "nao identificado" ||
+    company === "empresa não informada" ||
+    company === "empresa nao informada" ||
+    company === "não informada" ||
+    company === "nao informada";
+}
+
+function percent(value) {
+  if (!Number.isFinite(value)) return "0%";
+  return `${Math.round(value * 100)}%`;
+}
+
+function commercialEventScore(event) {
+  if (!event) return 0;
+  if (event.event === "page_view") return 1;
+  if (event.event === "search" || event.event === "search_no_results") return 2;
+  if (event.event === "product_open") return 3;
+  if (event.event === "add_to_cart") return 5 * productQuantity(productFromEvent(event), event.quantity || 1);
+  if (event.event === "whatsapp_quote") return 15;
+  return 1;
 }
 
 function safeNumber(value) {
@@ -529,6 +596,7 @@ function noResultDemandRows(events) {
   return [...map.values()]
     .sort((a, b) => b.count - a.count)
     .map((row, index) => {
+      const companyNames = [...row.companiesSet].filter((item) => !isAnonymousCompany(item));
       const companies = row.companiesSet.size;
       const consultants = row.consultantsSet.size;
       const formatted = {
@@ -537,6 +605,7 @@ function noResultDemandRows(events) {
         search: row.search,
         count: row.count,
         companies,
+        companyList: companyNames.slice(0, 3).join(", ") || "-",
         consultants,
         lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
         _search: ""
@@ -626,10 +695,12 @@ function companyActivityRows(events) {
       map.set(company, {
         company,
         totalActions: 0,
+        accesses: 0,
         searches: 0,
         productOpen: 0,
         added: 0,
         quotes: 0,
+        score: 0,
         quoteTotalNumber: 0,
         lastEventDate: null
       });
@@ -637,6 +708,8 @@ function companyActivityRows(events) {
 
     const row = map.get(company);
     row.totalActions += 1;
+    row.score += commercialEventScore(event);
+    if (event.event === "page_view") row.accesses += 1;
     if (event.event === "search" || event.event === "search_no_results") row.searches += 1;
     if (event.event === "product_open") row.productOpen += 1;
     if (event.event === "add_to_cart") row.added += productQuantity(productFromEvent(event), event.quantity || 1);
@@ -652,10 +725,14 @@ function companyActivityRows(events) {
   });
 
   return [...map.values()]
-    .sort((a, b) => b.totalActions - a.totalActions)
-    .map((row) => {
+    .sort((a, b) => b.score - a.score || b.quotes - a.quotes || b.totalActions - a.totalActions)
+    .map((row, index) => {
+      const quoteRateNumber = row.productOpen ? row.quotes / row.productOpen : 0;
       const formatted = {
         ...row,
+        id: `company-${index}-${row.company}`,
+        position: index + 1,
+        quoteRate: percent(quoteRateNumber),
         quoteTotal: money(row.quoteTotalNumber),
         lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
         _search: ""
@@ -663,10 +740,13 @@ function companyActivityRows(events) {
       formatted._search = [
         formatted.company,
         formatted.totalActions,
+        formatted.accesses,
         formatted.searches,
         formatted.productOpen,
         formatted.added,
         formatted.quotes,
+        formatted.score,
+        formatted.quoteRate,
         formatted.quoteTotal,
         formatted.lastEvent
       ].join(" ").toLowerCase();
@@ -687,6 +767,7 @@ function consultantActivityRows(events) {
         searches: 0,
         productOpen: 0,
         quotes: 0,
+        score: 0,
         quoteTotalNumber: 0,
         lastEventDate: null
       });
@@ -694,6 +775,7 @@ function consultantActivityRows(events) {
 
     const row = map.get(consultant);
     row.totalActions += 1;
+    row.score += commercialEventScore(event);
     if (event.event === "page_view") row.accesses += 1;
     if (event.event === "search" || event.event === "search_no_results") row.searches += 1;
     if (event.event === "product_open") row.productOpen += 1;
@@ -709,10 +791,14 @@ function consultantActivityRows(events) {
   });
 
   return [...map.values()]
-    .sort((a, b) => b.totalActions - a.totalActions)
-    .map((row) => {
+    .sort((a, b) => b.score - a.score || b.quotes - a.quotes || b.totalActions - a.totalActions)
+    .map((row, index) => {
+      const quoteRateNumber = row.productOpen ? row.quotes / row.productOpen : 0;
       const formatted = {
         ...row,
+        id: `consultant-${index}-${row.consultant}`,
+        position: index + 1,
+        quoteRate: percent(quoteRateNumber),
         quoteTotal: money(row.quoteTotalNumber),
         lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
         _search: ""
@@ -724,11 +810,154 @@ function consultantActivityRows(events) {
         formatted.searches,
         formatted.productOpen,
         formatted.quotes,
+        formatted.score,
+        formatted.quoteRate,
         formatted.quoteTotal,
         formatted.lastEvent
       ].join(" ").toLowerCase();
       return formatted;
     });
+}
+
+function dormantCompanyRows(events) {
+  const now = new Date();
+  const currentStart = new Date(now);
+  currentStart.setDate(currentStart.getDate() - 30);
+  const previousStart = new Date(now);
+  previousStart.setDate(previousStart.getDate() - 60);
+
+  const map = new Map();
+
+  events.forEach((event) => {
+    const company = normalizeCompany(event.companyName);
+    if (isAnonymousCompany(company)) return;
+
+    const eventDate = new Date(event.timestamp);
+    if (Number.isNaN(eventDate.getTime()) || eventDate < previousStart) return;
+
+    if (!map.has(company)) {
+      map.set(company, {
+        company,
+        currentScore: 0,
+        previousScore: 0,
+        currentActions: 0,
+        previousActions: 0,
+        currentQuotes: 0,
+        previousQuotes: 0,
+        lastEventDate: null
+      });
+    }
+
+    const row = map.get(company);
+    const score = commercialEventScore(event);
+
+    if (eventDate >= currentStart) {
+      row.currentScore += score;
+      row.currentActions += 1;
+      if (event.event === "whatsapp_quote") row.currentQuotes += 1;
+    } else {
+      row.previousScore += score;
+      row.previousActions += 1;
+      if (event.event === "whatsapp_quote") row.previousQuotes += 1;
+    }
+
+    if (!row.lastEventDate || eventDate > row.lastEventDate) row.lastEventDate = eventDate;
+  });
+
+  return [...map.values()]
+    .filter((row) => row.previousScore >= 10 && row.currentScore < row.previousScore)
+    .map((row) => {
+      const dropNumber = row.previousScore ? (row.previousScore - row.currentScore) / row.previousScore : 0;
+      const status = dropNumber >= 0.75 ? "Crítico" : dropNumber >= 0.45 ? "Atenção" : "Monitorar";
+      return {
+        ...row,
+        dropNumber,
+        status,
+        drop: `-${Math.round(dropNumber * 100)}%`,
+        lastEvent: row.lastEventDate ? dateTime(row.lastEventDate) : "-",
+        _search: ""
+      };
+    })
+    .sort((a, b) => b.dropNumber - a.dropNumber || b.previousScore - a.previousScore)
+    .map((row, index) => {
+      const formatted = {
+        ...row,
+        id: `dormant-${index}-${row.company}`,
+        position: index + 1
+      };
+      formatted._search = [
+        formatted.company,
+        formatted.status,
+        formatted.previousScore,
+        formatted.currentScore,
+        formatted.drop,
+        formatted.previousQuotes,
+        formatted.currentQuotes,
+        formatted.lastEvent
+      ].join(" ").toLowerCase();
+      return formatted;
+    });
+}
+
+function commercialInsightRows({ companyActivity, consultantActivity, dormantCompanies, noResultDemand, commercialProducts }) {
+  const insights = [];
+
+  const topCompany = companyActivity.find((row) => !isAnonymousCompany(row.company));
+  if (topCompany) {
+    insights.push({
+      id: "insight-top-company",
+      title: "Cliente mais quente",
+      value: topCompany.company,
+      detail: `${topCompany.score} pontos, ${topCompany.quotes} cotações e ${topCompany.quoteRate} de conversão.`,
+      level: "success"
+    });
+  }
+
+  const topConsultant = consultantActivity[0];
+  if (topConsultant) {
+    insights.push({
+      id: "insight-top-consultant",
+      title: "Consultor em destaque",
+      value: topConsultant.consultant,
+      detail: `${topConsultant.score} pontos e ${topConsultant.quotes} cotações no filtro atual.`,
+      level: "info"
+    });
+  }
+
+  const topDormant = dormantCompanies[0];
+  if (topDormant) {
+    insights.push({
+      id: "insight-dormant",
+      title: "Cliente esfriando",
+      value: topDormant.company,
+      detail: `Queda de ${topDormant.drop} no score comercial dos últimos 30 dias.`,
+      level: "warning"
+    });
+  }
+
+  const topDemand = noResultDemand[0];
+  if (topDemand) {
+    insights.push({
+      id: "insight-demand",
+      title: "Oportunidade de compra",
+      value: topDemand.search,
+      detail: `${topDemand.count} busca${topDemand.count === 1 ? "" : "s"} sem resultado.`,
+      level: "warning"
+    });
+  }
+
+  const topProduct = commercialProducts[0];
+  if (topProduct) {
+    insights.push({
+      id: "insight-product",
+      title: "Produto mais quente",
+      value: topProduct.product,
+      detail: `${topProduct.score} pontos, ${topProduct.quotes} cotações e ${topProduct.conversion} de conversão.`,
+      level: "success"
+    });
+  }
+
+  return insights;
 }
 
 function App() {
@@ -850,6 +1079,21 @@ function App() {
   const consultantValueRank = useMemo(() => countBy(byType.quotes, (event) => normalizeConsultant(event.consultant), (event) => event.cartTotal || event.total), [byType.quotes]);
   const consultantActivity = useMemo(() => consultantActivityRows(filtered), [filtered]);
 
+  const activityScope = useMemo(() => events.filter((event) => {
+    const okConsultant = consultant === "all" || normalizeConsultant(event.consultant) === consultant;
+    const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
+    return okConsultant && okCompany;
+  }), [events, consultant, company]);
+
+  const dormantCompanies = useMemo(() => dormantCompanyRows(activityScope).slice(0, 20), [activityScope]);
+  const commercialInsights = useMemo(() => commercialInsightRows({
+    companyActivity,
+    consultantActivity,
+    dormantCompanies,
+    noResultDemand,
+    commercialProducts
+  }), [companyActivity, consultantActivity, dormantCompanies, noResultDemand, commercialProducts]);
+
   const funnel = [
     ["Acessos", kpis.pageViews],
     ["Buscas", kpis.searches],
@@ -894,8 +1138,8 @@ function App() {
 
   function openCompanyModal() {
     openModal({
-      title: "Clientes mais ativos",
-      description: "Resumo completo por empresa no filtro atual.",
+      title: "Ranking comercial de empresas",
+      description: "Score comercial: acesso ×1, busca ×2, produto aberto ×3, carrinho ×5 e cotação WhatsApp ×15.",
       totalLabel: `${filtered.length} ações em ${companyActivity.length} empresa${companyActivity.length === 1 ? "" : "s"}`,
       rows: companyActivity,
       columns: COMPANY_ACTIVITY_COLUMNS,
@@ -905,12 +1149,23 @@ function App() {
 
   function openConsultantModal() {
     openModal({
-      title: "Consultores",
-      description: "Resumo completo por consultor no filtro atual.",
+      title: "Ranking comercial de consultores",
+      description: "Score comercial por consultor/link considerando acessos, buscas, produtos abertos e cotações.",
       totalLabel: `${filtered.length} ações em ${consultantActivity.length} consultor${consultantActivity.length === 1 ? "" : "es"}`,
       rows: consultantActivity,
       columns: CONSULTANT_ACTIVITY_COLUMNS,
       filters: { company: false, consultant: false }
+    });
+  }
+
+  function openDormantCompanyModal() {
+    openModal({
+      title: "Empresas adormecidas",
+      description: "Compara os últimos 30 dias contra os 30 dias anteriores e destaca clientes identificados que perderam atividade comercial.",
+      totalLabel: `${dormantCompanies.length} empresa${dormantCompanies.length === 1 ? "" : "s"} com queda de atividade`,
+      rows: dormantCompanyRows(activityScope),
+      columns: DORMANT_COMPANY_COLUMNS,
+      filters: { consultant: false }
     });
   }
 
@@ -1097,6 +1352,38 @@ function App() {
         <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp`} icon={<Send/>} onOpen={() => openQuoteModal("Valor total cotado")}/>
       </section>
 
+      <SectionTitle title="Inteligência comercial P1.2" subtitle="Ranking de clientes, consultores e clientes esfriando" />
+      <InsightStrip insights={commercialInsights} />
+      <section className="commercial-grid">
+        <MetricTable
+          title="Ranking de empresas"
+          subtitle="Score = acesso×1 + busca×2 + produto×3 + carrinho×5 + cotação×15"
+          rows={companyActivity.filter((row) => !isAnonymousCompany(row.company)).slice(0, 20)}
+          columns={COMPANY_COMMERCIAL_COLUMNS.slice(1, 7)}
+          empty={EMPTY_LIST_MESSAGE}
+          icon={<Building2 size={18}/>}
+          onOpen={openCompanyModal}
+        />
+        <MetricTable
+          title="Empresas adormecidas"
+          subtitle="Queda dos últimos 30 dias contra os 30 dias anteriores"
+          rows={dormantCompanies}
+          columns={DORMANT_COMPANY_COLUMNS.slice(1, 6)}
+          empty="Nenhuma empresa adormecida encontrada."
+          icon={<AlertTriangle size={18}/>}
+          onOpen={openDormantCompanyModal}
+        />
+        <MetricTable
+          title="Ranking de consultores"
+          subtitle="Performance por consultor/link no filtro atual"
+          rows={consultantActivity.slice(0, 20)}
+          columns={CONSULTANT_COMMERCIAL_COLUMNS.slice(1, 7)}
+          empty={EMPTY_LIST_MESSAGE}
+          icon={<UserCheck size={18}/>}
+          onOpen={openConsultantModal}
+        />
+      </section>
+
       <SectionTitle title="Buscas" subtitle="Demanda declarada e oportunidades sem resultado" />
       <section className="columns">
         <Rank title="Top buscas" rows={searchRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
@@ -1266,6 +1553,22 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
         )) : <p className="empty">{empty}</p>}
       </div>
     </article>
+  );
+}
+
+function InsightStrip({ insights = [] }) {
+  if (!insights.length) return null;
+
+  return (
+    <section className="insight-strip">
+      {insights.slice(0, 4).map((insight) => (
+        <article className={`insight-card ${insight.level || "info"}`} key={insight.id}>
+          <span>{insight.title}</span>
+          <strong title={insight.value}>{insight.value}</strong>
+          <p>{insight.detail}</p>
+        </article>
+      ))}
+    </section>
   );
 }
 
