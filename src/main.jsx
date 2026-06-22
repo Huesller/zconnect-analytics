@@ -21,6 +21,9 @@ import {
   XCircle
 } from "lucide-react";
 import "./styles.css";
+import { InsightStrip } from "./components/ExecutiveInsights.jsx";
+import { Kpi, ValueCard } from "./components/MetricCard.jsx";
+import { EmptyState } from "./components/EmptyState.jsx";
 
 const ANALYTICS_API_URL =
   import.meta.env.VITE_ANALYTICS_API_URL ||
@@ -1939,27 +1942,6 @@ function cardKeyHandler(onOpen) {
   };
 }
 
-function Kpi({ icon, label, value, onOpen }) {
-  return (
-    <article className={`kpi ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
-      <div className="icon">{icon}</div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </article>
-  );
-}
-
-function ValueCard({ title, value, sub, icon, onOpen }) {
-  return (
-    <article className={`spotlight ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
-      <div className="spot-icon">{icon}</div>
-      <span>{title}</span>
-      <strong>{value}</strong>
-      <p>{sub}</p>
-    </article>
-  );
-}
-
 function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (value) => value, onOpen }) {
   return (
     <article className={`panel ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
@@ -1971,25 +1953,9 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
             <strong title={name}>{name || "-"}</strong>
             <b>{formatValue(count)}</b>
           </div>
-        )) : <p className="empty">{empty}</p>}
+        )) : <EmptyState message={empty} />}
       </div>
     </article>
-  );
-}
-
-function InsightStrip({ insights = [] }) {
-  if (!insights.length) return null;
-
-  return (
-    <section className="insight-strip">
-      {insights.slice(0, 4).map((insight) => (
-        <article className={`insight-card ${insight.level || "info"}`} key={insight.id}>
-          <span>{insight.title}</span>
-          <strong title={insight.value}>{insight.value}</strong>
-          <p>{insight.detail}</p>
-        </article>
-      ))}
-    </section>
   );
 }
 
@@ -2011,7 +1977,7 @@ function MetricTable({ title, subtitle, rows = [], columns = [], empty = EMPTY_L
               </span>
             ))}
           </div>
-        )) : <p className="empty">{empty}</p>}
+        )) : <EmptyState message={empty} />}
       </div>
     </article>
   );
@@ -2032,7 +1998,7 @@ function RecentEvents({ events, title = "Buscas recentes", empty = EMPTY_LIST_ME
             </div>
             <time>{dateTime(event.timestamp)}</time>
           </div>
-        )) : <p className="empty">{empty}</p>}
+        )) : <EmptyState message={empty} />}
       </div>
     </article>
   );
