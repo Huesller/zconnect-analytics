@@ -24,6 +24,9 @@ import "./styles.css";
 import { InsightStrip } from "./components/ExecutiveInsights.jsx";
 import { Kpi, ValueCard } from "./components/MetricCard.jsx";
 import { EmptyState } from "./components/EmptyState.jsx";
+import { ExecutiveHeader } from "./components/ExecutiveHeader.jsx";
+import { StatGrid } from "./components/StatGrid.jsx";
+import { RankingTable } from "./components/RankingTable.jsx";
 
 const ANALYTICS_API_URL =
   import.meta.env.VITE_ANALYTICS_API_URL ||
@@ -1472,6 +1475,7 @@ function App() {
     ["Adicionados", kpis.added],
     ["Cotações WhatsApp", kpis.quotes]
   ];
+  const quoteConversionRate = kpis.productOpen ? percent(kpis.quotes / kpis.productOpen) : "0%";
   const lastUpdatedLabel = lastUpdatedAt ? timeOnly(lastUpdatedAt) : "--:--";
 
   function openModal(config) {
@@ -1697,59 +1701,49 @@ function App() {
 
   return (
     <main className="app">
-      <section className="hero">
-        <div>
-          <span className="eyebrow">Z Connect Analytics</span>
-          <h1>Analytics comercial diário</h1>
-          <p>Leitura objetiva dos eventos do catálogo por empresa, busca, produto, consultor e cotação.</p>
-        </div>
-        <div className="hero-actions">
-          <button onClick={() => load()} className="refresh" disabled={isLoading || isResetting}>
-            <RefreshCw className={isLoading ? "spin" : undefined} size={17}/> {isLoading ? "Atualizando..." : "Atualizar"}
-          </button>
-          <button onClick={exportExecutiveReport} className="refresh primary-export"><Download size={17}/> Relatório executivo</button>
-          <button onClick={exportRawCsv} className="refresh"><Download size={17}/> CSV bruto</button>
-        </div>
-      </section>
-
-      <section className="toolbar compact-toolbar">
-        <div className="status">
-          <span>{status}</span>
-          <small>Última atualização: {lastUpdatedLabel}</small>
-        </div>
-        <label><CalendarDays size={15}/> Período
-          <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-            <option value="today">Hoje</option>
-            <option value="7d">7 dias</option>
-            <option value="30d">30 dias</option>
-            <option value="all">Tudo</option>
-          </select>
-        </label>
-        <label><Filter size={15}/> Consultor
-          <select value={consultant} onChange={(event) => setConsultant(event.target.value)}>
-            {consultants.map((item) => <option key={item} value={item}>{item === "all" ? "Todos" : item.toUpperCase()}</option>)}
-          </select>
-        </label>
-        <label><Building2 size={15}/> Empresa
-          <select value={company} onChange={(event) => setCompany(event.target.value)}>
-            {companies.map((item) => <option key={item} value={item}>{item === "all" ? "Todas" : item}</option>)}
-          </select>
-        </label>
-      </section>
+      <ExecutiveHeader
+        title="Z Connect Intelligence"
+        subtitle="Painel comercial e comportamento de compra"
+        description="Leitura objetiva dos eventos do catálogo por empresa, busca, produto, consultor e cotação."
+        status={status}
+        lastUpdatedLabel={lastUpdatedLabel}
+        isLoading={isLoading}
+        isResetting={isResetting}
+        onRefresh={() => load()}
+        onExportExecutive={exportExecutiveReport}
+        onExportRaw={exportRawCsv}
+        period={period}
+        onPeriodChange={setPeriod}
+        consultant={consultant}
+        onConsultantChange={setConsultant}
+        consultants={consultants}
+        company={company}
+        onCompanyChange={setCompany}
+        companies={companies}
+        icons={{
+          refresh: <RefreshCw className={isLoading ? "spin" : undefined} size={17}/>,
+          download: <Download size={17}/>,
+          calendar: <CalendarDays size={15}/>,
+          filter: <Filter size={15}/>,
+          company: <Building2 size={15}/>
+        }}
+      />
 
       {!filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
 
       <SectionTitle title="Visão geral" subtitle="Resumo do período filtrado" />
-      <section className="kpi-grid">
-        <Kpi icon={<Users/>} label="Acessos" value={kpis.pageViews} onOpen={() => openEventModal("Acessos", byType.pageViews)}/>
-        <Kpi icon={<Search/>} label="Buscas" value={kpis.searches} onOpen={() => openSearchModal("Buscas", byType.searches)}/>
-        <Kpi icon={<AlertTriangle/>} label="Sem resultado" value={kpis.noResults} onOpen={() => openSearchModal("Buscas sem resultado", byType.noResults)}/>
-        <Kpi icon={<Eye/>} label="Produtos abertos" value={kpis.productOpen} onOpen={() => openEventModal("Produtos abertos", byType.productOpen)}/>
-        <Kpi icon={<ShoppingCart/>} label="Adicionados" value={kpis.added} onOpen={() => openEventModal("Produtos adicionados", byType.added)}/>
-        <Kpi icon={<XCircle/>} label="Removidos" value={kpis.removed} onOpen={() => openEventModal("Produtos removidos", byType.removed)}/>
-        <Kpi icon={<Trash2/>} label="Carrinhos limpos" value={kpis.cleared} onOpen={() => openEventModal("Carrinhos limpos", byType.cleared)}/>
-        <Kpi icon={<Send/>} label="Cotações WhatsApp" value={kpis.quotes} onOpen={() => openQuoteModal()}/>
-      </section>
+      <StatGrid
+        items={[
+          { icon: <Users/>, label: "Acessos", value: kpis.pageViews, onOpen: () => openEventModal("Acessos", byType.pageViews) },
+          { icon: <Search/>, label: "Buscas", value: kpis.searches, onOpen: () => openSearchModal("Buscas", byType.searches) },
+          { icon: <AlertTriangle/>, label: "Sem resultado", value: kpis.noResults, onOpen: () => openSearchModal("Buscas sem resultado", byType.noResults) },
+          { icon: <Eye/>, label: "Produtos abertos", value: kpis.productOpen, onOpen: () => openEventModal("Produtos abertos", byType.productOpen) },
+          { icon: <ShoppingCart/>, label: "Adicionados", value: kpis.added, onOpen: () => openEventModal("Produtos adicionados", byType.added) },
+          { icon: <XCircle/>, label: "Removidos", value: kpis.removed, onOpen: () => openEventModal("Produtos removidos", byType.removed) },
+          { icon: <Trash2/>, label: "Carrinhos limpos", value: kpis.cleared, onOpen: () => openEventModal("Carrinhos limpos", byType.cleared) },
+          { icon: <Send/>, label: "Cotações WhatsApp", value: kpis.quotes, onOpen: () => openQuoteModal(), emphasis: true }
+        ]}
+      />
 
       <SectionTitle title="Funil" subtitle="Do acesso até a cotação" />
       <section className="main-grid funnel-grid">
@@ -1766,6 +1760,7 @@ function App() {
           </div>
         </article>
         <ValueCard title="Valor cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp no filtro atual`} icon={<Send/>} onOpen={() => openQuoteModal("Valor cotado")}/>
+        <ValueCard title="Conversão geral" value={quoteConversionRate} sub="Cotações divididas por produtos abertos" icon={<TrendingUp/>} onOpen={() => openQuoteModal("Conversão geral")}/>
       </section>
 
       <SectionTitle title="Empresas" subtitle="Quem mais movimenta o catálogo" />
@@ -1961,25 +1956,17 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
 
 function MetricTable({ title, subtitle, rows = [], columns = [], empty = EMPTY_LIST_MESSAGE, icon, onOpen }) {
   return (
-    <article className={`panel metric-panel ${onOpen ? "clickable-card" : ""}`} role={onOpen ? "button" : undefined} tabIndex={onOpen ? 0 : undefined} onClick={onOpen} onKeyDown={cardKeyHandler(onOpen)}>
-      <div className="panel-head">
-        <h2>{icon}{title}</h2>
-        <span>{rows.length ? `${rows.length} itens` : ""}</span>
-      </div>
-      {subtitle ? <p className="panel-subtitle">{subtitle}</p> : null}
-      <div className="metric-list">
-        {rows.length ? rows.slice(0, 10).map((row, index) => (
-          <div className="metric-row" key={row.id || row.product || row.search || index}>
-            <span className="pos">{row.position || index + 1}</span>
-            {columns.map((column) => (
-              <span key={column.key} className={`metric-cell ${column.key === "product" || column.key === "search" ? "metric-name" : ""}`} title={String(row[column.key] ?? "-")}>
-                {row[column.key] ?? "-"}
-              </span>
-            ))}
-          </div>
-        )) : <EmptyState message={empty} />}
-      </div>
-    </article>
+    <RankingTable
+      title={title}
+      subtitle={subtitle}
+      rows={rows}
+      columns={columns}
+      empty={empty}
+      icon={icon}
+      onOpen={onOpen}
+      onKeyDown={cardKeyHandler(onOpen)}
+      EmptyStateComponent={EmptyState}
+    />
   );
 }
 
