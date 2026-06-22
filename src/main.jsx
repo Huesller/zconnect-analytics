@@ -1286,7 +1286,7 @@ function commercialInsightRows({ companyActivity, consultantActivity, dormantCom
     insights.push({
       id: "insight-top-consultant",
       title: "Consultor em destaque",
-      value: topConsultant.consultant,
+      value: `${topConsultant.consultant}`,
       detail: `${topConsultant.score} pontos e ${topConsultant.quotes} cotações no filtro atual.`,
       level: "info"
     });
@@ -1773,7 +1773,7 @@ function App() {
         <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp`} icon={<Send/>} onOpen={() => openQuoteModal("Valor total cotado")}/>
       </section>
 
-      <SectionTitle title="Inteligência comercial P1.2" subtitle="Ranking de clientes, consultores e clientes esfriando" />
+      <SectionTitle title="Insights do Dia" subtitle="Resumo executivo automático baseado nos dados do período selecionado" />
       <InsightStrip insights={commercialInsights} />
       <section className="commercial-grid">
         <MetricTable
@@ -1790,7 +1790,7 @@ function App() {
           subtitle="Queda dos últimos 30 dias contra os 30 dias anteriores"
           rows={dormantCompanies}
           columns={DORMANT_COMPANY_COLUMNS.slice(1, 6)}
-          empty="Nenhuma empresa adormecida encontrada."
+          empty="Monitoramento iniciado. Histórico mínimo de 30 dias necessário para identificar queda de atividade comercial."
           icon={<AlertTriangle size={18}/>}
           onOpen={openDormantCompanyModal}
         />
