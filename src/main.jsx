@@ -33,6 +33,11 @@ const ANALYTICS_API_URL =
   "https://script.google.com/macros/s/AKfycbxcISxjVLPj5mBz0oem-5FrDjL0fOf2NtX6Ry5prry2AIWce5Tsn2NwRinB2tQKMs0T/exec";
 
 const ADMIN_PIN = String(import.meta.env.VITE_ANALYTICS_ADMIN_PIN || "").trim();
+
+const ANALYTICS_LOGIN_USER = String(import.meta.env.VITE_ANALYTICS_LOGIN_USER || "").trim();
+const ANALYTICS_LOGIN_PASSWORD = String(import.meta.env.VITE_ANALYTICS_LOGIN_PASSWORD || "").trim();
+const AUTH_STORAGE_KEY = "zconnect_analytics_authenticated";
+const isLoginConfigured = Boolean(ANALYTICS_LOGIN_USER && ANALYTICS_LOGIN_PASSWORD);
 const EMPTY_PERIOD_MESSAGE = "Nenhum evento registrado no período.";
 const EMPTY_LIST_MESSAGE = "Sem dados no período.";
 const RESET_SUCCESS_MESSAGE = "Dados de teste limpos com sucesso";
@@ -1334,7 +1339,79 @@ function commercialInsightRows({ companyActivity, consultantActivity, dormantCom
   return insights;
 }
 
+
+function LoginScreen({ onLogin }) {
+  const [user, setUser] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+
+  function handleSubmit(event) {
+    event.preventDefault();
+
+    if (!isLoginConfigured) {
+      setError("Login ainda não configurado. Cadastre usuário e senha nas variáveis da Vercel.");
+      return;
+    }
+
+    const validUser = user.trim() === ANALYTICS_LOGIN_USER;
+    const validPassword = password === ANALYTICS_LOGIN_PASSWORD;
+
+    if (!validUser || !validPassword) {
+      setError("Usuário ou senha inválidos.");
+      return;
+    }
+
+    window.localStorage.setItem(AUTH_STORAGE_KEY, "true");
+    onLogin();
+  }
+
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-brand">
+          <span>Painel protegido</span>
+          <h1>Z Connect Intelligence</h1>
+          <p>Informe suas credenciais para acessar o Analytics comercial.</p>
+        </div>
+
+        <form className="login-form" onSubmit={handleSubmit}>
+          <label>
+            Usuário
+            <input
+              value={user}
+              onChange={(event) => setUser(event.target.value)}
+              autoComplete="username"
+              placeholder="Digite o usuário"
+              autoFocus
+            />
+          </label>
+
+          <label>
+            Senha
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              placeholder="Digite a senha"
+            />
+          </label>
+
+          {error ? <p className="login-error">{error}</p> : null}
+
+          <button className="login-submit" type="submit">Entrar no Analytics</button>
+        </form>
+
+        <p className="login-note">
+          O cadastro de acesso é feito apenas nas variáveis locais/Vercel. Não existe cadastro público online.
+        </p>
+      </section>
+    </main>
+  );
+}
+
 function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(() => window.localStorage.getItem(AUTH_STORAGE_KEY) === "true");
   const [events, setEvents] = useState([]);
   const [status, setStatus] = useState("Carregando eventos reais...");
   const [period, setPeriod] = useState("today");
@@ -1370,10 +1447,12 @@ function App() {
   }
 
   useEffect(() => {
+    if (!isAuthenticated) return undefined;
+
     load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -1661,6 +1740,13 @@ function App() {
     showToast("Relatório executivo exportado.");
   }
 
+  function handleLogout() {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    setIsAuthenticated(false);
+    setEvents([]);
+    setStatus("Sessão encerrada.");
+  }
+
   async function handleReset() {
     if (isResetting) return;
 
@@ -1699,8 +1785,15 @@ function App() {
     }
   }
 
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
+  }
+
   return (
     <main className="app">
+      <button className="logout-button" type="button" onClick={handleLogout} title="Encerrar sessão">
+        Sair
+      </button>
       <ExecutiveHeader
         title="Z Connect Intelligence"
         subtitle="Painel comercial e comportamento de compra"
