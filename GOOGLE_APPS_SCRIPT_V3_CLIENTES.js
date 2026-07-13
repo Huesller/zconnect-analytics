@@ -1,5 +1,9 @@
 const EVENTS_SHEET = "EVENTS";
 const OFFERS_SHEET = "OFFERS";
+const RESERVATIONS_SHEET = "RESERVATIONS";
+const ACTIVE_RESERVATION_TTL_MS = 20 * 60 * 1000;
+const QUOTED_RESERVATION_TTL_MS = 60 * 60 * 1000;
+const RESERVATION_HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
 
 const OFFER_HEADERS = [
   "createdAt",
@@ -53,6 +57,24 @@ const EVENT_HEADERS = [
   "specialOfferSource"
 ];
 
+const RESERVATION_HEADERS = [
+  "createdAt",
+  "updatedAt",
+  "expiresAt",
+  "sessionId",
+  "companyName",
+  "consultant",
+  "productCode",
+  "productName",
+  "brand",
+  "stockQty",
+  "requestedQty",
+  "reservedQty",
+  "excessQty",
+  "status",
+  "quotedAt"
+];
+
 function jsonOutput(data) {
   return ContentService
     .createTextOutput(JSON.stringify(data))
@@ -102,6 +124,31 @@ function getOffersSheet_() {
   let changed = false;
 
   OFFER_HEADERS.forEach(function(header) {
+    if (currentHeaders.indexOf(header) === -1) {
+      currentHeaders.push(header);
+      changed = true;
+    }
+  });
+
+  if (changed) sheet.getRange(1, 1, 1, currentHeaders.length).setValues([currentHeaders]);
+  return sheet;
+}
+
+function getReservationsSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(RESERVATIONS_SHEET);
+  if (!sheet) sheet = ss.insertSheet(RESERVATIONS_SHEET);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(RESERVATION_HEADERS);
+    return sheet;
+  }
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const currentHeaders = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  let changed = false;
+
+  RESERVATION_HEADERS.forEach(function(header) {
     if (currentHeaders.indexOf(header) === -1) {
       currentHeaders.push(header);
       changed = true;
@@ -371,6 +418,382 @@ function getSummary_() {
   };
 }
 
+function normalizeReservationSessionId_(value) {
+  const sessionId = String(value || "").trim();
+  return /^[A-Za-z0-9:_-]{6,120}$/.test(sessionId) ? sessionId : "";
+}
+
+function positiveInteger_(value, maximum) {
+  const parsed = Math.floor(Number(value));
+  if (!isFinite(parsed) || parsed < 0) return 0;
+  return Math.min(parsed, maximum || 9999);
+}
+
+function reservationDate_(value) {
+  const date = value instanceof Date ? value : new Date(value || 0);
+  return isNaN(date.getTime()) ? new Date(0) : date;
+}
+
+function normalizeReservationItems_(value) {
+  const source = Array.isArray(value) ? value : [];
+  const byCode = {};
+
+  source.slice(0, 80).forEach(function(item) {
+    const productCode = String(item && (item.productCode || item.code) || "").trim().slice(0, 80);
+    if (!productCode) return;
+
+    byCode[productCode] = {
+      productCode: productCode,
+      productName: String(item.productName || item.name || "").trim().replace(/\s+/g, " ").slice(0, 220),
+      brand: String(item.brand || "").trim().replace(/\s+/g, " ").slice(0, 80),
+      stockQty: positiveInteger_(item.stockQty !== undefined ? item.stockQty : item.stock, 99999),
+      requestedQty: positiveInteger_(item.requestedQty !== undefined ? item.requestedQty : item.quantity, 9999)
+    };
+  });
+
+  return Object.keys(byCode).map(function(code) { return byCode[code]; });
+}
+
+function readReservationRecords_(sheet) {
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  return {
+    headers: headers,
+    records: values.slice(1).map(function(row, index) {
+      const record = { __rowNumber: index + 2 };
+      headers.forEach(function(header, columnIndex) { record[header] = row[columnIndex]; });
+      return record;
+    })
+  };
+}
+
+function reservationIsHolding_(record, now) {
+  const status = String(record.status || "").toLowerCase();
+  if (status !== "active" && status !== "quoted") return false;
+  return reservationDate_(record.expiresAt).getTime() > now.getTime();
+}
+
+function expireReservations_(records, now) {
+  let changed = false;
+  records.forEach(function(record) {
+    const status = String(record.status || "").toLowerCase();
+    if ((status === "active" || status === "quoted") && !reservationIsHolding_(record, now)) {
+      record.status = "expired";
+      record.reservedQty = 0;
+      record.excessQty = 0;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function writeReservationRecords_(sheet, headers, records) {
+  const previousRows = Math.max(0, sheet.getLastRow() - 1);
+  if (records.length) {
+    const rows = records.map(function(record) {
+      return headers.map(function(header) {
+        return record[header] !== undefined ? record[header] : "";
+      });
+    });
+    sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+  }
+
+  const surplusRows = Math.max(0, previousRows - records.length);
+  if (surplusRows) sheet.deleteRows(records.length + 2, surplusRows);
+}
+
+function buildPublicReservationsFromRecords_(records, ownSessionId, now) {
+  const byCode = {};
+
+  records.forEach(function(record) {
+    if (!reservationIsHolding_(record, now)) return;
+    const productCode = String(record.productCode || "").trim();
+    if (!productCode) return;
+
+    if (!byCode[productCode]) {
+      byCode[productCode] = {
+        productCode: productCode,
+        productName: String(record.productName || ""),
+        stockQty: positiveInteger_(record.stockQty, 99999),
+        totalReservedQty: 0,
+        activeCarts: 0,
+        ownRequestedQty: 0,
+        ownReservedQty: 0,
+        ownExcessQty: 0,
+        ownStatus: "",
+        ownExpiresAt: "",
+        __sessions: {}
+      };
+    }
+
+    const item = byCode[productCode];
+    item.stockQty = Math.max(item.stockQty, positiveInteger_(record.stockQty, 99999));
+    item.totalReservedQty += positiveInteger_(record.reservedQty, 9999);
+    const rowSessionId = String(record.sessionId || "");
+    if (!item.__sessions[rowSessionId]) {
+      item.__sessions[rowSessionId] = true;
+      item.activeCarts++;
+    }
+    if (rowSessionId === ownSessionId) {
+      item.ownRequestedQty += positiveInteger_(record.requestedQty, 9999);
+      item.ownReservedQty += positiveInteger_(record.reservedQty, 9999);
+      item.ownExcessQty += positiveInteger_(record.excessQty, 9999);
+      item.ownStatus = String(record.status || "active");
+      item.ownExpiresAt = reservationDate_(record.expiresAt).toISOString();
+    }
+  });
+
+  return Object.keys(byCode).map(function(code) {
+    const item = byCode[code];
+    delete item.__sessions;
+    item.availableNow = Math.max(0, item.stockQty - item.totalReservedQty);
+    item.otherReservedQty = Math.max(0, item.totalReservedQty - item.ownReservedQty);
+    item.availableForSession = Math.max(0, item.stockQty - item.otherReservedQty);
+    return item;
+  });
+}
+
+function syncReservations_(data) {
+  const sessionId = normalizeReservationSessionId_(data.sessionId);
+  if (!sessionId) return { ok: false, error: "invalid_session" };
+
+  const items = normalizeReservationItems_(data.items);
+  const companyName = normalizeCompany_(data).replace(/\s+/g, " ").slice(0, 120);
+  const consultant = normalizeConsultor_(data.consultant || data.consultor);
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "reservation_busy" };
+  }
+
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    let records = loaded.records;
+    expireReservations_(records, now);
+    records = records.filter(function(record) {
+      if (reservationIsHolding_(record, now)) return true;
+      const lastActivity = reservationDate_(record.updatedAt || record.createdAt).getTime();
+      return lastActivity > now.getTime() - RESERVATION_HISTORY_RETENTION_MS;
+    });
+
+    const requestedCodes = {};
+    const ownByCode = {};
+    records.forEach(function(record) {
+      if (String(record.sessionId || "") !== sessionId) return;
+      const code = String(record.productCode || "");
+      if (code && !ownByCode[code]) ownByCode[code] = record;
+      else if (code && reservationIsHolding_(record, now)) {
+        record.status = "released";
+        record.reservedQty = 0;
+        record.excessQty = 0;
+      }
+    });
+
+    items.forEach(function(item) {
+      requestedCodes[item.productCode] = true;
+      let reservedByOthers = 0;
+      records.forEach(function(record) {
+        if (String(record.productCode || "") !== item.productCode) return;
+        if (String(record.sessionId || "") === sessionId) return;
+        if (reservationIsHolding_(record, now)) {
+          reservedByOthers += positiveInteger_(record.reservedQty, 9999);
+        }
+      });
+
+      const availableForSession = Math.max(0, item.stockQty - reservedByOthers);
+      const reservedQty = Math.min(item.requestedQty, availableForSession);
+      const excessQty = Math.max(0, item.requestedQty - reservedQty);
+      const record = ownByCode[item.productCode] || {};
+      if (!record.createdAt) record.createdAt = now;
+      record.updatedAt = now;
+      record.expiresAt = new Date(now.getTime() + ACTIVE_RESERVATION_TTL_MS);
+      record.sessionId = sessionId;
+      record.companyName = companyName;
+      record.consultant = consultant;
+      record.productCode = item.productCode;
+      record.productName = item.productName;
+      record.brand = item.brand;
+      record.stockQty = item.stockQty;
+      record.requestedQty = item.requestedQty;
+      record.reservedQty = reservedQty;
+      record.excessQty = excessQty;
+      record.status = "active";
+      record.quotedAt = "";
+
+      if (!ownByCode[item.productCode]) {
+        records.push(record);
+        ownByCode[item.productCode] = record;
+      }
+    });
+
+    Object.keys(ownByCode).forEach(function(code) {
+      if (requestedCodes[code]) return;
+      const record = ownByCode[code];
+      if (reservationIsHolding_(record, now)) {
+        record.updatedAt = now;
+        record.expiresAt = now;
+        record.reservedQty = 0;
+        record.excessQty = 0;
+        record.status = "released";
+      }
+    });
+
+    writeReservationRecords_(sheet, loaded.headers, records);
+    return {
+      ok: true,
+      ttlMinutes: 20,
+      products: buildPublicReservationsFromRecords_(records, sessionId, now)
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function quoteReservations_(data) {
+  const sessionId = normalizeReservationSessionId_(data.sessionId);
+  if (!sessionId) return { ok: false, error: "invalid_session" };
+
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "reservation_busy" };
+  }
+
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    expireReservations_(loaded.records, now);
+    let quotedRows = 0;
+
+    loaded.records.forEach(function(record) {
+      if (String(record.sessionId || "") !== sessionId || !reservationIsHolding_(record, now)) return;
+      record.status = "quoted";
+      record.updatedAt = now;
+      record.quotedAt = now;
+      record.expiresAt = new Date(now.getTime() + QUOTED_RESERVATION_TTL_MS);
+      quotedRows++;
+    });
+
+    writeReservationRecords_(sheet, loaded.headers, loaded.records);
+    return {
+      ok: true,
+      quotedRows: quotedRows,
+      ttlMinutes: 60,
+      products: buildPublicReservationsFromRecords_(loaded.records, sessionId, now)
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function releaseReservations_(data) {
+  const sessionId = normalizeReservationSessionId_(data.sessionId);
+  if (!sessionId) return { ok: false, error: "invalid_session" };
+
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "reservation_busy" };
+  }
+
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    loaded.records.forEach(function(record) {
+      if (String(record.sessionId || "") !== sessionId || !reservationIsHolding_(record, now)) return;
+      record.status = "released";
+      record.updatedAt = now;
+      record.expiresAt = now;
+      record.reservedQty = 0;
+      record.excessQty = 0;
+    });
+    writeReservationRecords_(sheet, loaded.headers, loaded.records);
+    return { ok: true, products: buildPublicReservationsFromRecords_(loaded.records, sessionId, now) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getPublicReservations_(sessionIdValue) {
+  const sessionId = normalizeReservationSessionId_(sessionIdValue);
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "reservation_busy" };
+  }
+
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    const changed = expireReservations_(loaded.records, now);
+    if (changed) writeReservationRecords_(sheet, loaded.headers, loaded.records);
+    return {
+      ok: true,
+      ttlMinutes: 20,
+      serverTime: now.toISOString(),
+      products: buildPublicReservationsFromRecords_(loaded.records, sessionId, now)
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getAdminReservations_() {
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "reservation_busy" };
+  }
+
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    const changed = expireReservations_(loaded.records, now);
+    if (changed) writeReservationRecords_(sheet, loaded.headers, loaded.records);
+
+    const reservations = loaded.records.filter(function(record) {
+      return reservationIsHolding_(record, now);
+    }).map(function(record, index) {
+      return {
+        id: "reservation-" + (record.__rowNumber || index + 2),
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        expiresAt: record.expiresAt,
+        sessionId: String(record.sessionId || ""),
+        companyName: String(record.companyName || ""),
+        consultant: String(record.consultant || ""),
+        productCode: String(record.productCode || ""),
+        productName: String(record.productName || ""),
+        brand: String(record.brand || ""),
+        stockQty: positiveInteger_(record.stockQty, 99999),
+        requestedQty: positiveInteger_(record.requestedQty, 9999),
+        reservedQty: positiveInteger_(record.reservedQty, 9999),
+        excessQty: positiveInteger_(record.excessQty, 9999),
+        status: String(record.status || "active"),
+        quotedAt: record.quotedAt || ""
+      };
+    }).sort(function(a, b) {
+      return reservationDate_(b.updatedAt).getTime() - reservationDate_(a.updatedAt).getTime();
+    });
+
+    return { ok: true, serverTime: now.toISOString(), reservations: reservations };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function clearEvents_(data) {
   const configuredPin = String(PropertiesService.getScriptProperties().getProperty("ANALYTICS_ADMIN_PIN") || "").trim();
   const requestedPin = String(data.pin || data.adminPin || data.admin_pin || "").trim();
@@ -396,6 +819,9 @@ function doPost(e) {
 
   if (action === "track") return jsonOutput(appendEvent_(data));
   if (action === "create_offer_short") return jsonOutput(createShortOffer_(data));
+  if (action === "sync_reservations") return jsonOutput(syncReservations_(data));
+  if (action === "quote_reservations") return jsonOutput(quoteReservations_(data));
+  if (action === "release_reservations") return jsonOutput(releaseReservations_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
@@ -407,6 +833,8 @@ function doGet(e) {
   if (action === "events") return jsonOutput(readEvents_());
   if (action === "summary") return jsonOutput(getSummary_());
   if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
+  if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
+  if (action === "reservations_admin") return jsonOutput(getAdminReservations_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(e.parameter || {}));
 
   if (action === "track") {
@@ -414,5 +842,5 @@ function doGet(e) {
     return jsonOutput(appendEvent_(params));
   }
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics V9" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics V9.1 + Reservas V1" });
 }

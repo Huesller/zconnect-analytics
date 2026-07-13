@@ -198,6 +198,26 @@ const OFFER_COLUMNS = [
   { key: "createdAt", label: "Criada em", className: "col-time" }
 ];
 
+const RESERVATION_COLUMNS = [
+  { key: "company", label: "Empresa", className: "col-company-wide" },
+  { key: "consultant", label: "Consultor", className: "col-consultant" },
+  { key: "product", label: "Produto", className: "col-product-wide" },
+  { key: "requested", label: "Solicitadas", className: "col-metric" },
+  { key: "reserved", label: "Reservadas", className: "col-metric" },
+  { key: "excess", label: "Sob consulta", className: "col-metric" },
+  { key: "status", label: "Status", className: "col-event" },
+  { key: "expires", label: "Expira", className: "col-time" }
+];
+
+const ACTIVE_CART_COLUMNS = [
+  { key: "company", label: "Empresa", className: "col-company-wide" },
+  { key: "consultant", label: "Consultor", className: "col-consultant" },
+  { key: "products", label: "Produtos", className: "col-metric" },
+  { key: "reserved", label: "Reservadas", className: "col-metric" },
+  { key: "excess", label: "Sob consulta", className: "col-metric" },
+  { key: "status", label: "Status", className: "col-event" }
+];
+
 function normalizeEvent(value) {
   const event = String(value || "").trim();
   return EVENT_ALIASES[event] || event;
@@ -367,6 +387,63 @@ async function fetchEvents() {
     const rows = lines.slice(1).map((line) => line.split(","));
     return parseEvents(rows);
   }
+}
+
+function reservationExpiryLabel(value) {
+  const expiresAt = new Date(value);
+  if (Number.isNaN(expiresAt.getTime())) return "-";
+  const minutes = Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 60000));
+  if (minutes < 1) return "agora";
+  if (minutes < 60) return `em ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `em ${hours}h ${remainder}min` : `em ${hours}h`;
+}
+
+function normalizeReservation(row, index) {
+  const statusKey = String(row?.status || "active").toLowerCase();
+  const company = normalizeCompany(row?.companyName);
+  const consultant = normalizeConsultant(row?.consultant).toUpperCase();
+  const productCode = String(row?.productCode || "").trim();
+  const productName = String(row?.productName || "").trim();
+  const requestedNumber = safeNumber(row?.requestedQty);
+  const reservedNumber = safeNumber(row?.reservedQty);
+  const excessNumber = safeNumber(row?.excessQty);
+  const formatted = {
+    id: row?.id || `reservation-${index}`,
+    sessionId: String(row?.sessionId || ""),
+    company,
+    consultant,
+    product: [productCode, productName].filter(Boolean).join(" · ") || "Produto não informado",
+    requested: requestedNumber,
+    reserved: reservedNumber,
+    excess: excessNumber || "-",
+    requestedNumber,
+    reservedNumber,
+    excessNumber,
+    stockQty: safeNumber(row?.stockQty),
+    statusKey,
+    status: statusKey === "quoted" ? "Cotação enviada" : "No carrinho",
+    expires: reservationExpiryLabel(row?.expiresAt),
+    expiresAtRaw: row?.expiresAt || "",
+    updatedAtRaw: row?.updatedAt || row?.createdAt || "",
+    updatedAt: dateTime(row?.updatedAt || row?.createdAt),
+    productCode,
+    productName
+  };
+  formatted._search = [formatted.company, formatted.consultant, formatted.product, formatted.status]
+    .join(" ")
+    .toLowerCase();
+  return formatted;
+}
+
+async function fetchActiveReservations() {
+  const url = `${ANALYTICS_API_URL}?action=reservations_admin&cache=${Date.now()}`;
+  const response = await fetch(url, { method: "GET", cache: "no-store" });
+  if (!response.ok) throw new Error("Não foi possível carregar os carrinhos ativos.");
+  const data = await response.json();
+  const rows = Array.isArray(data?.reservations) ? data.reservations : [];
+  return rows.map(normalizeReservation);
 }
 
 async function clearEvents(pin) {
@@ -1491,6 +1568,7 @@ function LoginScreen({ onLogin }) {
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => window.localStorage.getItem(AUTH_STORAGE_KEY) === "true");
   const [events, setEvents] = useState([]);
+  const [reservations, setReservations] = useState([]);
   const [status, setStatus] = useState("Carregando eventos reais...");
   const [period, setPeriod] = useState("today");
   const [consultant, setConsultant] = useState("all");
@@ -1509,12 +1587,18 @@ function App() {
     if (!silent) setStatus("Carregando eventos reais...");
     setIsLoading(true);
     try {
-      const data = await fetchEvents();
+      const [data, activeReservations] = await Promise.all([
+        fetchEvents(),
+        fetchActiveReservations().catch(() => [])
+      ]);
       setEvents(data);
+      setReservations(activeReservations);
       setLastUpdatedAt(new Date());
-      setStatus(data.length ? `Eventos carregados: ${data.length}` : EMPTY_PERIOD_MESSAGE);
+      const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
+      setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
     } catch (error) {
       setEvents([]);
+      setReservations([]);
       setStatus(error.message || "Não consegui carregar os eventos.");
     } finally {
       setIsLoading(false);
@@ -1540,14 +1624,20 @@ function App() {
   }, [toast]);
 
   const consultants = useMemo(() => {
-    return ["all", ...new Set(events.map((event) => normalizeConsultant(event.consultant)))];
-  }, [events]);
+    return ["all", ...new Set([
+      ...events.map((event) => normalizeConsultant(event.consultant)),
+      ...reservations.map((item) => normalizeConsultant(item.consultant))
+    ])];
+  }, [events, reservations]);
 
   const companies = useMemo(() => {
-    const names = [...new Set(events.map((event) => normalizeCompany(event.companyName)))]
+    const names = [...new Set([
+      ...events.map((event) => normalizeCompany(event.companyName)),
+      ...reservations.map((item) => normalizeCompany(item.company))
+    ])]
       .sort((a, b) => a.localeCompare(b, "pt-BR"));
     return ["all", ...names];
-  }, [events]);
+  }, [events, reservations]);
 
   const periodFiltered = useMemo(() => events.filter((event) => isSamePeriod(event.createdAt, period)), [events, period]);
 
@@ -1556,6 +1646,57 @@ function App() {
     const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
     return okConsultant && okCompany;
   }), [periodFiltered, consultant, company]);
+
+  const filteredReservations = useMemo(() => reservations.filter((item) => {
+    const okConsultant = consultant === "all" || normalizeConsultant(item.consultant) === consultant;
+    const okCompany = company === "all" || normalizeCompany(item.company) === company;
+    return okConsultant && okCompany;
+  }).map((item, index) => ({ ...item, position: index + 1, expires: reservationExpiryLabel(item.expiresAtRaw) })), [reservations, consultant, company, lastUpdatedAt]);
+
+  const reservationKpis = useMemo(() => ({
+    carts: new Set(filteredReservations.map((item) => item.sessionId)).size,
+    reserved: filteredReservations.reduce((sum, item) => sum + item.reservedNumber, 0),
+    excess: filteredReservations.reduce((sum, item) => sum + item.excessNumber, 0),
+    quoted: new Set(filteredReservations.filter((item) => item.statusKey === "quoted").map((item) => item.sessionId)).size
+  }), [filteredReservations]);
+
+  const activeCartRows = useMemo(() => {
+    const carts = new Map();
+    filteredReservations.forEach((item) => {
+      if (!carts.has(item.sessionId)) {
+        carts.set(item.sessionId, {
+          id: item.sessionId,
+          sessionId: item.sessionId,
+          company: item.company,
+          consultant: item.consultant,
+          products: 0,
+          requestedNumber: 0,
+          reservedNumber: 0,
+          excessNumber: 0,
+          quoted: false
+        });
+      }
+      const cart = carts.get(item.sessionId);
+      cart.products += 1;
+      cart.requestedNumber += item.requestedNumber;
+      cart.reservedNumber += item.reservedNumber;
+      cart.excessNumber += item.excessNumber;
+      cart.quoted = cart.quoted || item.statusKey === "quoted";
+    });
+
+    return [...carts.values()].map((cart, index) => {
+      const status = cart.quoted ? "Cotação enviada" : "No carrinho";
+      return {
+        ...cart,
+        position: index + 1,
+        requested: cart.requestedNumber,
+        reserved: cart.reservedNumber,
+        excess: cart.excessNumber || "-",
+        status,
+        _search: [cart.company, cart.consultant, status].join(" ").toLowerCase()
+      };
+    });
+  }, [filteredReservations]);
 
   const byType = useMemo(() => ({
     pageViews: filtered.filter((event) => event.event === "page_view"),
@@ -1679,6 +1820,16 @@ function App() {
     openEventModal(title, byType.quotes, {
       columns: QUOTE_HISTORY_COLUMNS,
       totalLabel: `${byType.quotes.length} cotação${byType.quotes.length === 1 ? "" : "ões"} / ${money(kpis.quoteTotal)}`
+    });
+  }
+
+  function openReservationsModal(title = "Carrinhos ativos agora") {
+    openModal({
+      title,
+      description: "Reservas temporárias do catálogo. Os nomes são visíveis apenas neste painel interno; clientes veem somente quantidades.",
+      totalLabel: `${reservationKpis.carts} carrinho(s) · ${reservationKpis.reserved} unidade(s) reservada(s)`,
+      rows: filteredReservations,
+      columns: RESERVATION_COLUMNS
     });
   }
 
@@ -1896,6 +2047,7 @@ function App() {
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
     { id: "companies", label: "Clientes", icon: <Building2 size={17}/> },
     { id: "products", label: "Produtos", icon: <Flame size={17}/> },
+    { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
     { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
     { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
   ];
@@ -1955,10 +2107,10 @@ function App() {
 
       <section className="analytics-view-head">
         <div><span>Área atual</span><h2>{currentView.label}</h2></div>
-        <p>{activeView === "overview" ? "Os números essenciais para decidir rápido." : activeView === "companies" ? "Quem está comprando, pesquisando ou perdendo interesse." : activeView === "products" ? "Demanda real, intenção de compra e lacunas do catálogo." : activeView === "offers" ? "Do link especial criado até a cotação enviada." : "Histórico detalhado e administração dos dados."}</p>
+        <p>{activeView === "overview" ? "Os números essenciais para decidir rápido." : activeView === "companies" ? "Quem está comprando, pesquisando ou perdendo interesse." : activeView === "products" ? "Demanda real, intenção de compra e lacunas do catálogo." : activeView === "carts" ? "O que os clientes estão separando agora, com reserva e excedente em tempo real." : activeView === "offers" ? "Do link especial criado até a cotação enviada." : "Histórico detalhado e administração dos dados."}</p>
       </section>
 
-      {!filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
+      {activeView !== "carts" && !filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
 
       {activeView === "overview" ? (
         <div className="view-stack">
@@ -2025,6 +2177,38 @@ function App() {
             <Rank title="Top buscas" rows={searchRank} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
             <Rank title="Mais abertos" rows={productOpenRank} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
             <Rank title="Mais adicionados" rows={productAddedRank} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
+          </section>
+        </div>
+      ) : null}
+
+      {activeView === "carts" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <ShoppingCart/>, label: "Carrinhos ativos", value: reservationKpis.carts, onOpen: openReservationsModal, emphasis: true },
+            { icon: <UserCheck/>, label: "Peças reservadas", value: reservationKpis.reserved, onOpen: openReservationsModal },
+            { icon: <AlertTriangle/>, label: "Excedente solicitado", value: reservationKpis.excess, onOpen: openReservationsModal },
+            { icon: <Send/>, label: "Cotações em andamento", value: reservationKpis.quoted, onOpen: () => openReservationsModal("Cotações em andamento"), emphasis: true }
+          ]}/>
+          <section className="overview-grid reservations-overview-grid">
+            <div className="reservations-table-wrap">
+              <MetricTable
+                title="Carrinhos ativos"
+                subtitle="Uma linha por cliente; clique para ver todos os produtos e quantidades"
+                rows={activeCartRows}
+                columns={ACTIVE_CART_COLUMNS}
+                empty="Nenhum carrinho ativo neste momento."
+                icon={<ShoppingCart size={18}/>}
+                onOpen={openReservationsModal}
+              />
+            </div>
+            <article className="panel reservation-rules-panel">
+              <div className="panel-head"><h2><UserCheck size={18}/> Como ler</h2><span>Atualização automática</span></div>
+              <div className="reservation-rule-list">
+                <div><i className="active"/><span><strong>No carrinho</strong>Reserva temporária renovada enquanto o cliente está ativo.</span></div>
+                <div><i className="quoted"/><span><strong>Cotação enviada</strong>Reserva ampliada para o atendimento comercial.</span></div>
+                <div><i className="warning"/><span><strong>Sob consulta</strong>Quantidade pedida acima do estoque disponível; não bloqueia a cotação.</span></div>
+              </div>
+            </article>
           </section>
         </div>
       ) : null}
