@@ -1790,11 +1790,15 @@ function App() {
   const quoteConversionRate = kpis.productOpen ? percent(kpis.quotes / kpis.productOpen) : "0%";
   const lastUpdatedLabel = lastUpdatedAt ? timeOnly(lastUpdatedAt) : "--:--";
 
-  function openModal(config) {
+  function openModal(config = {}) {
+    const safeTitle = typeof config.title === "string" && config.title.trim()
+      ? config.title.trim()
+      : "Detalhes";
     setActiveModal({
-      id: `${config.title}-${Date.now()}`,
       empty: EMPTY_LIST_MESSAGE,
-      ...config
+      ...config,
+      title: safeTitle,
+      id: `${safeTitle}-${Date.now()}`
     });
   }
 
@@ -1823,9 +1827,12 @@ function App() {
     });
   }
 
-  function openReservationsModal(title = "Carrinhos ativos agora") {
+  function openReservationsModal(title) {
+    const modalTitle = typeof title === "string" && title.trim()
+      ? title.trim()
+      : "Carrinhos ativos agora";
     openModal({
-      title,
+      title: modalTitle,
       description: "Reservas temporárias do catálogo. Os nomes são visíveis apenas neste painel interno; clientes veem somente quantidades.",
       totalLabel: `${reservationKpis.carts} carrinho(s) · ${reservationKpis.reserved} unidade(s) reservada(s)`,
       rows: filteredReservations,
