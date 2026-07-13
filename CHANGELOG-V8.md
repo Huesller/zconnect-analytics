@@ -1,5 +1,12 @@
 # CHANGELOG V8 - Analytics por Empresa
 
+## Build 1 — ofertas assinadas (13/07/2026)
+
+- Eventos `special_offer_created` e `special_offer_opened` recebem nomes legíveis no histórico.
+- ID, cliente, consultor, adicional e validade da oferta passam a ser preservados.
+- `GOOGLE_APPS_SCRIPT_V3_CLIENTES.js` adiciona automaticamente as colunas de ofertas existentes sem apagar dados.
+- A autenticação do painel de Analytics não foi alterada.
+
 ## Implementado
 
 - Dashboard passou a reconhecer `empresa`, `companyName` e `clientId`.

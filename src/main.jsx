@@ -59,7 +59,9 @@ const EVENT_LABELS = {
   add_to_cart: "Adicionado",
   remove_from_cart: "Removido",
   clear_cart: "Carrinho limpo",
-  whatsapp_quote: "Cotação WhatsApp"
+  whatsapp_quote: "Cotação WhatsApp",
+  special_offer_created: "Oferta criada",
+  special_offer_opened: "Oferta aberta"
 };
 
 const EVENT_HISTORY_COLUMNS = [
@@ -290,7 +292,19 @@ function normalizeObjectEvent(row, index) {
     referrer: readField(row, ["referrer"], ""),
     userAgent: readField(row, ["userAgent"], ""),
     searchTimeMs: safeNumber(readField(row, ["searchTimeMs", "search_time", "elapsedMs"])),
-    resultsCount: safeNumber(readField(row, ["resultsCount", "results", "resultCount"]))
+    resultsCount: safeNumber(readField(row, ["resultsCount", "results", "resultCount"])),
+    specialOffer: Boolean(readField(row, ["specialOffer"], false)),
+    specialOfferId: String(readField(row, ["specialOfferId"], "")).trim(),
+    specialOfferSigned: Boolean(readField(row, ["specialOfferSigned"], false)),
+    specialOfferActive: Boolean(readField(row, ["specialOfferActive"], false)),
+    specialOfferExpired: Boolean(readField(row, ["specialOfferExpired"], false)),
+    specialOfferClient: String(readField(row, ["specialOfferClient"], "")).trim(),
+    specialOfferSeller: normalizeConsultant(readField(row, ["specialOfferSeller"], "")),
+    specialOfferMode: String(readField(row, ["specialOfferMode"], "")).trim(),
+    specialOfferDiscount: safeNumber(readField(row, ["specialOfferDiscount"])),
+    specialOfferFactor: safeNumber(readField(row, ["specialOfferFactor"])),
+    specialOfferExpiresAt: String(readField(row, ["specialOfferExpiresAt"], "")).trim(),
+    specialOfferSource: String(readField(row, ["specialOfferSource"], "")).trim()
   };
 }
 

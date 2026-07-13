@@ -26,7 +26,19 @@ const EVENT_HEADERS = [
   "eventId",
   "clientId",
   "searchTimeMs",
-  "resultsCount"
+  "resultsCount",
+  "specialOffer",
+  "specialOfferId",
+  "specialOfferSigned",
+  "specialOfferActive",
+  "specialOfferExpired",
+  "specialOfferClient",
+  "specialOfferSeller",
+  "specialOfferMode",
+  "specialOfferDiscount",
+  "specialOfferFactor",
+  "specialOfferExpiresAt",
+  "specialOfferSource"
 ];
 
 function jsonOutput(data) {
@@ -153,7 +165,19 @@ function appendEvent_(data) {
     empresa: companyName,
     company: companyName,
     searchTimeMs: number_(data.searchTimeMs || data.search_time || data.elapsedMs || 0),
-    resultsCount: number_(data.resultsCount || data.results || data.resultCount || 0)
+    resultsCount: number_(data.resultsCount || data.results || data.resultCount || 0),
+    specialOffer: Boolean(data.specialOffer),
+    specialOfferId: String(data.specialOfferId || ""),
+    specialOfferSigned: Boolean(data.specialOfferSigned),
+    specialOfferActive: Boolean(data.specialOfferActive),
+    specialOfferExpired: Boolean(data.specialOfferExpired),
+    specialOfferClient: String(data.specialOfferClient || data.clientName || ""),
+    specialOfferSeller: normalizeConsultor_(data.specialOfferSeller || ""),
+    specialOfferMode: String(data.specialOfferMode || ""),
+    specialOfferDiscount: number_(data.specialOfferDiscount || 0),
+    specialOfferFactor: number_(data.specialOfferFactor || 0),
+    specialOfferExpiresAt: String(data.specialOfferExpiresAt || ""),
+    specialOfferSource: String(data.specialOfferSource || "")
   };
 
   const row = headers.map(function(header) {
