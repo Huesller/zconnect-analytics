@@ -1,5 +1,12 @@
 # Analytics V9
 
+## V9.0.1 — contraste de interação
+
+- Corrige o fundo escuro herdado ao passar o mouse nos cards.
+- Mantém títulos, métricas e linhas legíveis durante hover e foco por teclado.
+- Converte o histórico para superfície clara com cabeçalho escuro de alto contraste.
+- Melhora o contraste de filtros, tabela, botão de fechar e linhas selecionadas.
+
 ## Painel executivo por áreas — 13/07/2026
 
 - Substitui a página longa por cinco áreas: visão geral, clientes, produtos, ofertas e atividade.

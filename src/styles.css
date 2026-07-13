@@ -1404,6 +1404,61 @@ input:focus {
 .analytics-app .pos { border-radius: 2px; }
 .analytics-app .event-row { color: var(--muted-strong); }
 
+/* O tema executivo é claro: hover e histórico não podem herdar o tema escuro legado. */
+.analytics-app .clickable-card:hover,
+.analytics-app .clickable-card:focus-visible {
+  border-color: rgba(215, 25, 45, .62);
+  background: #fffafa;
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(26, 24, 21, .09);
+}
+.analytics-app .clickable-card:hover .panel-head h2,
+.analytics-app .clickable-card:hover .panel-head span,
+.analytics-app .clickable-card:hover .panel-subtitle,
+.analytics-app .clickable-card:hover .metric-cell,
+.analytics-app .clickable-card:focus-visible .panel-head h2,
+.analytics-app .clickable-card:focus-visible .panel-head span,
+.analytics-app .clickable-card:focus-visible .panel-subtitle,
+.analytics-app .clickable-card:focus-visible .metric-cell {
+  color: inherit;
+}
+.analytics-app .clickable-card:hover .metric-row,
+.analytics-app .clickable-card:focus-visible .metric-row {
+  border-color: #d7d2ca;
+  background: #fff;
+}
+
+.analytics-app .modal-backdrop { background: rgba(20, 21, 24, .62); backdrop-filter: blur(3px); }
+.analytics-app .modal-card {
+  border-color: #c7c2ba;
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .28);
+}
+.analytics-app .modal-header,
+.analytics-app .modal-summary,
+.analytics-app .modal-filters { border-color: var(--line); background: #fff; }
+.analytics-app .modal-header h2,
+.analytics-app .modal-summary strong { color: var(--text); }
+.analytics-app .modal-header p,
+.analytics-app .modal-summary span { color: var(--muted); }
+.analytics-app .modal-close {
+  border-color: var(--line-strong);
+  background: var(--surface-soft);
+  color: var(--text);
+}
+.analytics-app .modal-close:hover,
+.analytics-app .modal-close:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.analytics-app .modal-filters label { border-color: var(--line); background: var(--surface-soft); color: var(--muted-strong); }
+.analytics-app .modal-filters input,
+.analytics-app .modal-filters select { border-color: var(--line); background: #fff; color: var(--text); }
+.analytics-app .modal-export { border-color: var(--line-strong); background: var(--surface-soft); color: var(--muted-strong); }
+.analytics-app .modal-table-wrap { background: #fff; }
+.analytics-app .modal-table th { border-color: #34363b; background: #1b1d21; color: #fff; }
+.analytics-app .modal-table td { border-color: var(--line); background: #fff; color: var(--muted-strong); }
+.analytics-app .modal-table tbody tr:nth-child(even) td { background: #faf9f7; }
+.analytics-app .modal-table tbody tr:hover td { background: #fff1f2; color: var(--text); }
+
 .overview-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(360px, .7fr); gap: 14px; }
 .offer-overview-grid { grid-template-columns: minmax(420px, .8fr) minmax(0, 1.2fr); }
 .three-columns { grid-template-columns: repeat(3, minmax(0, 1fr)); }
