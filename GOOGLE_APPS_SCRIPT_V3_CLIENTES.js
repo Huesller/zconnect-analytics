@@ -1,4 +1,16 @@
 const EVENTS_SHEET = "EVENTS";
+const OFFERS_SHEET = "OFFERS";
+
+const OFFER_HEADERS = [
+  "createdAt",
+  "shortCode",
+  "clientSlug",
+  "signedToken",
+  "offerId",
+  "clientName",
+  "seller",
+  "expiresAt"
+];
 
 const EVENT_HEADERS = [
   "createdAt",
@@ -73,6 +85,115 @@ function getEventsSheet_() {
   }
 
   return sheet;
+}
+
+function getOffersSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(OFFERS_SHEET);
+  if (!sheet) sheet = ss.insertSheet(OFFERS_SHEET);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(OFFER_HEADERS);
+    return sheet;
+  }
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const currentHeaders = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  let changed = false;
+
+  OFFER_HEADERS.forEach(function(header) {
+    if (currentHeaders.indexOf(header) === -1) {
+      currentHeaders.push(header);
+      changed = true;
+    }
+  });
+
+  if (changed) sheet.getRange(1, 1, 1, currentHeaders.length).setValues([currentHeaders]);
+  return sheet;
+}
+
+function normalizeShortCode_(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return /^[A-HJ-NP-Z2-9]{8}$/.test(code) ? code : "";
+}
+
+function normalizeClientSlug_(value) {
+  const slug = String(value || "").trim().toUpperCase();
+  return /^[A-Z0-9][A-Z0-9-]{0,39}$/.test(slug) ? slug : "";
+}
+
+function findOfferRowByCode_(sheet, code) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  const headers = getHeaders_(sheet);
+  const codeColumn = headers.indexOf("shortCode") + 1;
+  if (!codeColumn) return 0;
+
+  const match = sheet
+    .getRange(2, codeColumn, lastRow - 1, 1)
+    .createTextFinder(code)
+    .matchEntireCell(true)
+    .findNext();
+
+  return match ? match.getRow() : 0;
+}
+
+function createShortOffer_(data) {
+  const shortCode = normalizeShortCode_(data.shortCode || data.code);
+  const clientSlug = normalizeClientSlug_(data.clientSlug);
+  const signedToken = String(data.signedToken || data.token || "").trim();
+  const offerId = String(data.offerId || "").trim().slice(0, 80);
+  const clientName = String(data.clientName || "").trim().replace(/\s+/g, " ").slice(0, 100);
+  const seller = normalizeConsultor_(data.seller || data.consultant || data.consultor);
+  const expiresAt = String(data.expiresAt || "").trim();
+
+  if (!shortCode || !clientSlug || !offerId || !clientName) {
+    return { ok: false, error: "invalid_offer_reference" };
+  }
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(signedToken) || signedToken.length > 1200) {
+    return { ok: false, error: "invalid_signed_token" };
+  }
+
+  const sheet = getOffersSheet_();
+  if (findOfferRowByCode_(sheet, shortCode)) {
+    return { ok: false, error: "short_code_collision" };
+  }
+
+  const record = {
+    createdAt: new Date(),
+    shortCode: shortCode,
+    clientSlug: clientSlug,
+    signedToken: signedToken,
+    offerId: offerId,
+    clientName: clientName,
+    seller: seller,
+    expiresAt: expiresAt
+  };
+  const headers = getHeaders_(sheet);
+  sheet.appendRow(headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; }));
+
+  return { ok: true, shortCode: shortCode, clientSlug: clientSlug };
+}
+
+function resolveShortOffer_(code) {
+  const shortCode = normalizeShortCode_(code);
+  if (!shortCode) return { ok: false, error: "invalid_short_code" };
+
+  const sheet = getOffersSheet_();
+  const rowNumber = findOfferRowByCode_(sheet, shortCode);
+  if (!rowNumber) return { ok: false, error: "offer_not_found" };
+
+  const headers = getHeaders_(sheet);
+  const values = sheet.getRange(rowNumber, 1, 1, headers.length).getValues()[0];
+  const item = {};
+  headers.forEach(function(header, index) { item[header] = values[index]; });
+
+  return {
+    ok: true,
+    token: String(item.signedToken || ""),
+    clientSlug: String(item.clientSlug || ""),
+    offerId: String(item.offerId || "")
+  };
 }
 
 function parseBody_(e) {
@@ -274,6 +395,7 @@ function doPost(e) {
   const action = data.action || "track";
 
   if (action === "track") return jsonOutput(appendEvent_(data));
+  if (action === "create_offer_short") return jsonOutput(createShortOffer_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
@@ -284,6 +406,7 @@ function doGet(e) {
 
   if (action === "events") return jsonOutput(readEvents_());
   if (action === "summary") return jsonOutput(getSummary_());
+  if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(e.parameter || {}));
 
   if (action === "track") {
@@ -291,5 +414,5 @@ function doGet(e) {
     return jsonOutput(appendEvent_(params));
   }
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics V8" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics V9" });
 }

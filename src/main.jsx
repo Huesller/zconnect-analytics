@@ -187,6 +187,17 @@ const DORMANT_COMPANY_COLUMNS = [
   { key: "lastEvent", label: "Último evento", className: "col-time" }
 ];
 
+const OFFER_COLUMNS = [
+  { key: "client", label: "Cliente", className: "col-company-wide" },
+  { key: "consultant", label: "Consultor", className: "col-consultant" },
+  { key: "discount", label: "Adicional", className: "col-metric" },
+  { key: "opens", label: "Aberturas", className: "col-metric" },
+  { key: "quotes", label: "Cotações", className: "col-metric" },
+  { key: "quoteTotal", label: "Valor cotado", className: "col-value" },
+  { key: "status", label: "Status", className: "col-event" },
+  { key: "createdAt", label: "Criada em", className: "col-time" }
+];
+
 function normalizeEvent(value) {
   const event = String(value || "").trim();
   return EVENT_ALIASES[event] || event;
@@ -1353,6 +1364,59 @@ function commercialInsightRows({ companyActivity, consultantActivity, dormantCom
   return insights;
 }
 
+function specialOfferRows(events) {
+  const offers = new Map();
+
+  events.forEach((event) => {
+    const offerId = String(event.specialOfferId || "").trim();
+    if (!offerId) return;
+
+    if (!offers.has(offerId)) {
+      offers.set(offerId, {
+        id: offerId,
+        client: event.specialOfferClient || event.companyName || "Cliente não informado",
+        consultant: normalizeConsultant(event.specialOfferSeller || event.consultant).toUpperCase(),
+        discountNumber: safeNumber(event.specialOfferDiscount),
+        expiresAtRaw: event.specialOfferExpiresAt || "",
+        createdAtRaw: event.createdAt || event.timestamp,
+        opens: 0,
+        quotes: 0,
+        quoteTotalNumber: 0
+      });
+    }
+
+    const row = offers.get(offerId);
+    if (event.event === "special_offer_created") {
+      row.createdAtRaw = event.createdAt || event.timestamp || row.createdAtRaw;
+      row.client = event.specialOfferClient || event.companyName || row.client;
+      row.consultant = normalizeConsultant(event.specialOfferSeller || event.consultant).toUpperCase();
+      row.discountNumber = safeNumber(event.specialOfferDiscount) || row.discountNumber;
+      row.expiresAtRaw = event.specialOfferExpiresAt || row.expiresAtRaw;
+    }
+    if (event.event === "special_offer_opened") row.opens += 1;
+    if (event.event === "whatsapp_quote") {
+      row.quotes += 1;
+      row.quoteTotalNumber += safeNumber(event.cartTotal || event.total);
+    }
+  });
+
+  return [...offers.values()]
+    .sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw))
+    .map((row) => {
+      const expires = row.expiresAtRaw ? new Date(row.expiresAtRaw) : null;
+      const expired = expires && !Number.isNaN(expires.getTime()) && expires.getTime() < Date.now();
+      const formatted = {
+        ...row,
+        discount: row.discountNumber ? `${row.discountNumber.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%` : "-",
+        quoteTotal: money(row.quoteTotalNumber),
+        status: expired ? "Expirada" : "Ativa",
+        createdAt: dateTime(row.createdAtRaw)
+      };
+      formatted._search = [formatted.id, formatted.client, formatted.consultant, formatted.status].join(" ").toLowerCase();
+      return formatted;
+    });
+}
+
 
 function LoginScreen({ onLogin }) {
   const [user, setUser] = useState("");
@@ -1438,6 +1502,7 @@ function App() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [toast, setToast] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
+  const [activeView, setActiveView] = useState("overview");
 
   async function load(options = {}) {
     const silent = options?.silent === true;
@@ -1560,6 +1625,19 @@ function App() {
     noResultDemand,
     commercialProducts
   }), [companyActivity, consultantActivity, dormantCompanies, noResultDemand, commercialProducts]);
+  const offerEvents = useMemo(() => filtered.filter((event) => (
+    event.event === "special_offer_created"
+    || event.event === "special_offer_opened"
+    || (event.event === "whatsapp_quote" && event.specialOfferId)
+  )), [filtered]);
+  const offers = useMemo(() => specialOfferRows(offerEvents), [offerEvents]);
+  const offerCreatedEvents = useMemo(() => filtered.filter((event) => event.event === "special_offer_created"), [filtered]);
+  const offerOpenedEvents = useMemo(() => filtered.filter((event) => event.event === "special_offer_opened"), [filtered]);
+  const offerQuoteEvents = useMemo(() => byType.quotes.filter((event) => event.specialOfferId), [byType.quotes]);
+  const offerQuoteTotal = useMemo(() => offerQuoteEvents.reduce((sum, event) => sum + safeNumber(event.cartTotal || event.total), 0), [offerQuoteEvents]);
+  const identifiedCompanies = useMemo(() => new Set(
+    filtered.map((event) => normalizeCompany(event.companyName)).filter((name) => !isAnonymousCompany(name))
+  ).size, [filtered]);
 
   const funnel = [
     ["Acessos", kpis.pageViews],
@@ -1668,6 +1746,17 @@ function App() {
       totalLabel: `${rows.length} termo${rows.length === 1 ? "" : "s"} sem resultado`,
       rows,
       columns: NO_RESULT_DEMAND_COLUMNS,
+      filters: { company: false, consultant: false }
+    });
+  }
+
+  function openOffersModal() {
+    openModal({
+      title: "Desempenho das ofertas especiais",
+      description: "Da criação do link curto até a abertura e a cotação enviada pelo cliente.",
+      totalLabel: `${offers.length} oferta${offers.length === 1 ? "" : "s"}`,
+      rows: offers,
+      columns: OFFER_COLUMNS,
       filters: { company: false, consultant: false }
     });
   }
@@ -1802,6 +1891,197 @@ function App() {
   if (!isAuthenticated) {
     return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
   }
+
+  const navigation = [
+    { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
+    { id: "companies", label: "Clientes", icon: <Building2 size={17}/> },
+    { id: "products", label: "Produtos", icon: <Flame size={17}/> },
+    { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
+    { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
+  ];
+  const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
+
+  return (
+    <main className="app analytics-app">
+      <header className="analytics-topbar">
+        <div className="analytics-brand">
+          <span className="analytics-brand-mark">Z</span>
+          <div>
+            <small>Inteligência comercial</small>
+            <h1>Z Connect</h1>
+          </div>
+        </div>
+        <div className="analytics-top-actions">
+          <button type="button" className="refresh" onClick={() => load()} disabled={isLoading || isResetting}>
+            <RefreshCw className={isLoading ? "spin" : undefined} size={16}/>{isLoading ? "Atualizando" : "Atualizar"}
+          </button>
+          <button type="button" className="refresh" onClick={exportExecutiveReport}><Download size={16}/> Relatório</button>
+          <button type="button" className="analytics-logout" onClick={handleLogout}>Sair</button>
+        </div>
+      </header>
+
+      <section className="analytics-controlbar">
+        <div className="analytics-status">
+          <i className={isLoading ? "loading" : ""}/>
+          <span>{status}</span>
+          <small>Atualizado {lastUpdatedLabel}</small>
+        </div>
+        <div className="analytics-filters">
+          <label><CalendarDays size={14}/> Período
+            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
+              <option value="today">Hoje</option><option value="7d">7 dias</option><option value="30d">30 dias</option><option value="all">Tudo</option>
+            </select>
+          </label>
+          <label><UserCheck size={14}/> Consultor
+            <select value={consultant} onChange={(event) => setConsultant(event.target.value)}>
+              {consultants.map((item) => <option key={item} value={item}>{item === "all" ? "Todos" : item.toUpperCase()}</option>)}
+            </select>
+          </label>
+          <label><Building2 size={14}/> Empresa
+            <select value={company} onChange={(event) => setCompany(event.target.value)}>
+              {companies.map((item) => <option key={item} value={item}>{item === "all" ? "Todas" : item}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <nav className="analytics-nav" aria-label="Áreas do Analytics">
+        {navigation.map((item) => (
+          <button key={item.id} type="button" className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
+            {item.icon}<span>{item.label}</span>{item.badge ? <b>{item.badge}</b> : null}
+          </button>
+        ))}
+      </nav>
+
+      <section className="analytics-view-head">
+        <div><span>Área atual</span><h2>{currentView.label}</h2></div>
+        <p>{activeView === "overview" ? "Os números essenciais para decidir rápido." : activeView === "companies" ? "Quem está comprando, pesquisando ou perdendo interesse." : activeView === "products" ? "Demanda real, intenção de compra e lacunas do catálogo." : activeView === "offers" ? "Do link especial criado até a cotação enviada." : "Histórico detalhado e administração dos dados."}</p>
+      </section>
+
+      {!filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
+
+      {activeView === "overview" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Users/>, label: "Acessos", value: kpis.pageViews, onOpen: () => openEventModal("Acessos", byType.pageViews) },
+            { icon: <Building2/>, label: "Clientes identificados", value: identifiedCompanies, onOpen: openCompanyModal },
+            { icon: <Send/>, label: "Cotações", value: kpis.quotes, onOpen: () => openQuoteModal(), emphasis: true },
+            { icon: <TrendingUp/>, label: "Valor cotado", value: money(kpis.quoteTotal), onOpen: () => openQuoteModal("Valor cotado"), emphasis: true }
+          ]}/>
+          <section className="overview-grid">
+            <article className="panel decision-panel">
+              <div className="panel-head"><h2><TrendingUp size={18}/> Caminho até a cotação</h2><span>{quoteConversionRate} de conversão</span></div>
+              <div className="heat funnel-compact">
+                {funnel.map(([label, value]) => {
+                  const max = Math.max(1, funnel[0][1]);
+                  return <div key={label} className="bar-row"><span>{label}</span><div><i style={{width:`${Math.max(4, Math.min(100, (value / max) * 100))}%`}}/></div><b>{value}</b></div>;
+                })}
+              </div>
+            </article>
+            <RecentEvents title="Últimas cotações" events={sortEventsDesc(byType.quotes).slice(0, 7)} empty={EMPTY_LIST_MESSAGE} detailFn={(event) => `${quoteItemsCount(event)} itens · ${money(event.cartTotal || event.total)}`} onOpen={() => openQuoteModal("Cotações recentes")}/>
+          </section>
+          <InsightStrip insights={commercialInsights}/>
+          <section className="overview-grid">
+            <MetricTable title="Clientes em destaque" subtitle="Atividade comercial no período" rows={companyActivity.filter((row) => !isAnonymousCompany(row.company)).slice(0, 8)} columns={COMPANY_COMMERCIAL_COLUMNS.slice(1, 6)} empty={EMPTY_LIST_MESSAGE} icon={<Building2 size={18}/>} onOpen={openCompanyModal}/>
+            <MetricTable title="Equipe comercial" subtitle="Origem das interações e cotações" rows={consultantActivity.slice(0, 8)} columns={CONSULTANT_COMMERCIAL_COLUMNS.slice(1, 6)} empty={EMPTY_LIST_MESSAGE} icon={<UserCheck size={18}/>} onOpen={openConsultantModal}/>
+          </section>
+        </div>
+      ) : null}
+
+      {activeView === "companies" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Building2/>, label: "Identificados", value: identifiedCompanies, onOpen: openCompanyModal },
+            { icon: <Search/>, label: "Empresas pesquisando", value: companySearchRank.length, onOpen: () => openSearchModal("Buscas por empresa", allSearchEvents) },
+            { icon: <Send/>, label: "Empresas cotando", value: companyQuoteRank.length, onOpen: () => openQuoteModal("Empresas que cotaram") },
+            { icon: <AlertTriangle/>, label: "Perdendo atividade", value: dormantCompanies.length, onOpen: openDormantCompanyModal }
+          ]}/>
+          <section className="overview-grid">
+            <MetricTable title="Ranking de clientes" subtitle="Score de acesso, busca, produto, carrinho e cotação" rows={companyActivity.filter((row) => !isAnonymousCompany(row.company)).slice(0, 20)} columns={COMPANY_COMMERCIAL_COLUMNS.slice(1, 7)} empty={EMPTY_LIST_MESSAGE} icon={<Building2 size={18}/>} onOpen={openCompanyModal}/>
+            <MetricTable title="Clientes esfriando" subtitle="Queda recente de atividade comercial" rows={dormantCompanies} columns={DORMANT_COMPANY_COLUMNS.slice(1, 6)} empty="Ainda não há histórico suficiente para apontar queda." icon={<AlertTriangle size={18}/>} onOpen={openDormantCompanyModal}/>
+          </section>
+          <section className="columns three-columns">
+            <Rank title="Mais ativos" rows={companyActiveRank} onOpen={openCompanyModal}/>
+            <Rank title="Mais pesquisaram" rows={companySearchRank} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
+            <Rank title="Mais cotaram" rows={companyQuoteRank} onOpen={() => openQuoteModal("Cotações por empresa")}/>
+          </section>
+        </div>
+      ) : null}
+
+      {activeView === "products" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Eye/>, label: "Produtos abertos", value: kpis.productOpen, onOpen: () => openEventModal("Produtos abertos", byType.productOpen) },
+            { icon: <ShoppingCart/>, label: "Adicionados", value: kpis.added, onOpen: () => openEventModal("Produtos adicionados", byType.added) },
+            { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
+            { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
+          ]}/>
+          <section className="commercial-grid">
+            <MetricTable title="Produtos mais quentes" subtitle="Maior intenção comercial" rows={hotProducts} columns={HOT_PRODUCT_COLUMNS.slice(1, 6)} empty={EMPTY_LIST_MESSAGE} icon={<Flame size={18}/>} onOpen={openHotProductsModal}/>
+            <MetricTable title="Produtos mais cotados" subtitle="Itens pedidos pelo WhatsApp" rows={quotedProducts} columns={QUOTED_PRODUCT_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<Send size={18}/>} onOpen={openQuotedProductsModal}/>
+            <MetricTable title="Oportunidades de cadastro" subtitle="O que foi buscado e não encontrado" rows={noResultDemand.slice(0, 20)} columns={NO_RESULT_DEMAND_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<AlertTriangle size={18}/>} onOpen={openNoResultDemandModal}/>
+          </section>
+          <section className="columns three-columns">
+            <Rank title="Top buscas" rows={searchRank} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
+            <Rank title="Mais abertos" rows={productOpenRank} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
+            <Rank title="Mais adicionados" rows={productAddedRank} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
+          </section>
+        </div>
+      ) : null}
+
+      {activeView === "offers" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Send/>, label: "Ofertas criadas", value: offerCreatedEvents.length, onOpen: openOffersModal },
+            { icon: <Eye/>, label: "Aberturas", value: offerOpenedEvents.length, onOpen: openOffersModal },
+            { icon: <ShoppingCart/>, label: "Cotações de oferta", value: offerQuoteEvents.length, onOpen: openOffersModal, emphasis: true },
+            { icon: <TrendingUp/>, label: "Valor das ofertas", value: money(offerQuoteTotal), onOpen: openOffersModal, emphasis: true }
+          ]}/>
+          <section className="overview-grid offer-overview-grid">
+            <article className="panel decision-panel">
+              <div className="panel-head"><h2><TrendingUp size={18}/> Conversão das ofertas</h2><span>{offerOpenedEvents.length ? percent(offerQuoteEvents.length / offerOpenedEvents.length) : "0%"}</span></div>
+              <div className="offer-steps">
+                <div><span>1</span><strong>Links criados</strong><b>{offerCreatedEvents.length}</b></div>
+                <div><span>2</span><strong>Links abertos</strong><b>{offerOpenedEvents.length}</b></div>
+                <div><span>3</span><strong>Cotações enviadas</strong><b>{offerQuoteEvents.length}</b></div>
+              </div>
+            </article>
+            <RecentEvents title="Atividade das ofertas" events={sortEventsDesc(offerEvents).slice(0, 8)} empty="Nenhuma oferta especial no período." detailFn={(event) => `${EVENT_LABELS[event.event] || event.event} · ${event.specialOfferId || "-"}`} onOpen={openOffersModal}/>
+          </section>
+          <div className="offers-table-wrap">
+            <MetricTable title="Ofertas por cliente" subtitle="Condição interna, abertura e resultado comercial" rows={offers.slice(0, 30)} columns={OFFER_COLUMNS.slice(0, 7)} empty="Nenhuma oferta registrada neste período." icon={<Send size={18}/>} onOpen={openOffersModal}/>
+          </div>
+        </div>
+      ) : null}
+
+      {activeView === "events" ? (
+        <div className="view-stack">
+          <section className="panel">
+            <div className="panel-head"><h2><UserCheck size={18}/> Eventos recentes</h2><span>{filtered.length} filtrados</span></div>
+            <div className="event-table">
+              <div className="event-head"><span>Hora</span><span>Evento</span><span>Empresa</span><span>Consultor</span><span>Detalhe</span></div>
+              {sortEventsDesc(filtered).slice(0, 30).map((event) => (
+                <div className="event-row" key={`${event.id}-${event.timestamp}`}><span>{dateTime(event.timestamp)}</span><strong>{EVENT_LABELS[event.event] || event.event}</strong><span>{event.companyName}</span><span>{event.consultant.toUpperCase()}</span><span title={eventDetail(event)}>{eventDetail(event)}</span></div>
+              ))}
+              {!filtered.length ? <p className="empty">{EMPTY_LIST_MESSAGE}</p> : null}
+            </div>
+          </section>
+          <details className="admin-details">
+            <summary>Administração e exportação técnica</summary>
+            <div className="admin-details-content">
+              <button type="button" className="refresh" onClick={exportRawCsv}><Download size={16}/> Exportar CSV bruto</button>
+              {ADMIN_PIN ? <label className="admin-pin">PIN <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" disabled={isResetting}/></label> : null}
+              <button className="danger-button" type="button" onClick={handleReset} disabled={isResetting}>{isResetting ? <RefreshCw className="spin" size={17}/> : <Eraser size={17}/>} {isResetting ? "Limpando..." : "Limpar dados de teste"}</button>
+              {resetStatus ? <small>{resetStatus}</small> : null}
+            </div>
+          </details>
+        </div>
+      ) : null}
+
+      {activeModal ? <HistoryModal key={activeModal.id} modal={activeModal} onClose={() => setActiveModal(null)}/> : null}
+      {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
+    </main>
+  );
 
   return (
     <main className="app">
