@@ -1,6 +1,7 @@
 const EVENTS_SHEET = "EVENTS";
 const OFFERS_SHEET = "OFFERS";
 const RESERVATIONS_SHEET = "RESERVATIONS";
+const CRM_CLIENTS_SHEET = "CRM_CLIENTS";
 const ACTIVE_RESERVATION_TTL_MS = 20 * 60 * 1000;
 const QUOTED_RESERVATION_TTL_MS = 60 * 60 * 1000;
 const RESERVATION_HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
@@ -73,6 +74,18 @@ const RESERVATION_HEADERS = [
   "excessQty",
   "status",
   "quotedAt"
+];
+
+const CRM_CLIENT_HEADERS = [
+  "companyKey",
+  "companyName",
+  "status",
+  "owner",
+  "nextContactAt",
+  "tags",
+  "notes",
+  "createdAt",
+  "updatedAt"
 ];
 
 function jsonOutput(data) {
@@ -156,6 +169,29 @@ function getReservationsSheet_() {
   });
 
   if (changed) sheet.getRange(1, 1, 1, currentHeaders.length).setValues([currentHeaders]);
+  return sheet;
+}
+
+function getCrmClientsSheet_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(CRM_CLIENTS_SHEET);
+  if (!sheet) sheet = ss.insertSheet(CRM_CLIENTS_SHEET);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(CRM_CLIENT_HEADERS);
+    return sheet;
+  }
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  let changed = false;
+  CRM_CLIENT_HEADERS.forEach(function(header) {
+    if (headers.indexOf(header) === -1) {
+      headers.push(header);
+      changed = true;
+    }
+  });
+  if (changed) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   return sheet;
 }
 
@@ -794,13 +830,301 @@ function getAdminReservations_() {
   }
 }
 
-function clearEvents_(data) {
-  const configuredPin = String(PropertiesService.getScriptProperties().getProperty("ANALYTICS_ADMIN_PIN") || "").trim();
-  const requestedPin = String(data.pin || data.adminPin || data.admin_pin || "").trim();
+function normalizeCompanyKey_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-  if (configuredPin && requestedPin !== configuredPin) {
-    return { ok: false, error: "invalid_pin" };
+function cleanupReason_(companyName) {
+  const key = normalizeCompanyKey_(companyName);
+  const anonymous = {
+    "": true,
+    "nao identificado": true,
+    "empresa nao informada": true,
+    "nao informada": true,
+    "anonimo": true,
+    "visitante": true,
+    "sem empresa": true
+  };
+  if (anonymous[key]) return "Empresa não identificada";
+
+  const tokens = key.split(" ");
+  const hasTestToken = tokens.some(function(token) {
+    return /^(teste|testes|test|testing)\d*$/.test(token);
+  });
+  if (hasTestToken) return "Nome de teste";
+  return "";
+}
+
+function validateAdminPin_(data) {
+  const configuredPin = String(PropertiesService.getScriptProperties().getProperty("ANALYTICS_ADMIN_PIN") || "").trim();
+  const requestedPin = String((data || {}).pin || (data || {}).adminPin || (data || {}).admin_pin || "").trim();
+  return !configuredPin || requestedPin === configuredPin;
+}
+
+function readCrmClients_() {
+  const sheet = getCrmClientsSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const clients = values.slice(1).map(function(row, index) {
+    const item = { id: "crm-" + (index + 2) };
+    headers.forEach(function(header, columnIndex) { item[header] = row[columnIndex]; });
+    return item;
+  }).filter(function(item) { return String(item.companyKey || "").trim(); });
+  return { ok: true, clients: clients };
+}
+
+function upsertCrmClient_(data) {
+  const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
+  if (!companyKey || cleanupReason_(companyName)) return { ok: false, error: "invalid_company" };
+
+  const allowedStatuses = ["new", "contact", "negotiation", "active", "cold", "lost"];
+  const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
+  const ownerRaw = String(data.owner || data.consultant || "").trim();
+  const owner = ownerRaw ? normalizeConsultor_(ownerRaw).slice(0, 80) : "";
+  const nextContactAt = String(data.nextContactAt || "").trim().slice(0, 40);
+  const tags = String(data.tags || "").trim().replace(/\s+/g, " ").slice(0, 240);
+  const notes = String(data.notes || "").trim().slice(0, 3000);
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+
+  try {
+    lock.waitLock(10000);
+  } catch (err) {
+    return { ok: false, error: "crm_busy" };
   }
+
+  try {
+    const sheet = getCrmClientsSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const keyIndex = headers.indexOf("companyKey");
+    let rowNumber = 0;
+    for (let index = 1; index < values.length; index++) {
+      if (normalizeCompanyKey_(values[index][keyIndex]) === companyKey) {
+        rowNumber = index + 1;
+        break;
+      }
+    }
+
+    const existingCreatedAt = rowNumber
+      ? sheet.getRange(rowNumber, headers.indexOf("createdAt") + 1).getValue()
+      : now;
+    const record = {
+      companyKey: companyKey,
+      companyName: companyName,
+      status: status,
+      owner: owner,
+      nextContactAt: nextContactAt,
+      tags: tags,
+      notes: notes,
+      createdAt: existingCreatedAt || now,
+      updatedAt: now
+    };
+    const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+    if (rowNumber) sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
+    else sheet.appendRow(row);
+    return { ok: true, client: record };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function getCompanyFromEventRow_(row, headers) {
+  const indexes = ["companyName", "empresa", "company"].map(function(header) { return headers.indexOf(header); });
+  for (let index = 0; index < indexes.length; index++) {
+    const columnIndex = indexes[index];
+    if (columnIndex >= 0 && row[columnIndex] !== "" && row[columnIndex] !== null && row[columnIndex] !== undefined) {
+      return String(row[columnIndex]).trim();
+    }
+  }
+  return "";
+}
+
+function previewCleanupCandidates_() {
+  const sheet = getEventsSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const createdAtIndex = headers.indexOf("createdAt");
+  const candidates = {};
+
+  values.slice(1).forEach(function(row) {
+    const companyName = getCompanyFromEventRow_(row, headers);
+    const reason = cleanupReason_(companyName);
+    if (!reason) return;
+    const companyKey = normalizeCompanyKey_(companyName);
+    const candidateKey = companyKey || "__empty__";
+    if (!candidates[candidateKey]) {
+      candidates[candidateKey] = {
+        companyKey: companyKey,
+        companyName: companyName || "Empresa não informada",
+        reason: reason,
+        eventCount: 0,
+        firstAt: "",
+        lastAt: ""
+      };
+    }
+    const item = candidates[candidateKey];
+    item.eventCount++;
+    const createdAt = createdAtIndex >= 0 ? row[createdAtIndex] : "";
+    const date = reservationDate_(createdAt);
+    if (date.getTime() > 0) {
+      if (!item.firstAt || date < reservationDate_(item.firstAt)) item.firstAt = date;
+      if (!item.lastAt || date > reservationDate_(item.lastAt)) item.lastAt = date;
+    }
+  });
+
+  const list = Object.keys(candidates).map(function(key) { return candidates[key]; })
+    .sort(function(a, b) { return b.eventCount - a.eventCount; });
+  return {
+    ok: true,
+    candidates: list,
+    candidateEvents: list.reduce(function(total, item) { return total + item.eventCount; }, 0)
+  };
+}
+
+function writeRowsInChunks_(sheet, startRow, rows) {
+  const chunkSize = 1000;
+  for (let offset = 0; offset < rows.length; offset += chunkSize) {
+    const chunk = rows.slice(offset, offset + chunkSize);
+    sheet.getRange(startRow + offset, 1, chunk.length, chunk[0].length).setValues(chunk);
+  }
+}
+
+function createCleanupBackup_(headers, rows, label) {
+  if (!rows.length) return "";
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const timezone = Session.getScriptTimeZone() || "America/Sao_Paulo";
+  const stamp = Utilities.formatDate(new Date(), timezone, "yyyyMMdd-HHmmss");
+  let name = ("BACKUP_" + label + "_" + stamp).slice(0, 95);
+  let suffix = 1;
+  while (ss.getSheetByName(name)) {
+    name = ("BACKUP_" + label + "_" + stamp + "_" + suffix).slice(0, 99);
+    suffix++;
+  }
+  const backup = ss.insertSheet(name);
+  backup.getRange(1, 1, 1, headers.length).setValues([headers]);
+  writeRowsInChunks_(backup, 2, rows);
+  backup.setFrozenRows(1);
+  return name;
+}
+
+function replaceEventRows_(sheet, headers, rows) {
+  const previousRows = Math.max(0, sheet.getLastRow() - 1);
+  if (previousRows) sheet.getRange(2, 1, previousRows, headers.length).clearContent();
+  if (rows.length) writeRowsInChunks_(sheet, 2, rows);
+}
+
+function cleanupSelectedCompanies_(data) {
+  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
+  const requestedKeys = Array.isArray(data.companyKeys) ? data.companyKeys.slice(0, 100) : [];
+  const selected = {};
+  requestedKeys.forEach(function(value) {
+    const key = normalizeCompanyKey_(value);
+    selected[key || "__empty__"] = true;
+  });
+  if (!Object.keys(selected).length) return { ok: false, error: "no_companies_selected" };
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (err) {
+    return { ok: false, error: "cleanup_busy" };
+  }
+
+  try {
+    const sheet = getEventsSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const keep = [];
+    const removed = [];
+    const removedCompanies = {};
+
+    values.slice(1).forEach(function(row) {
+      const companyName = getCompanyFromEventRow_(row, headers);
+      const companyKey = normalizeCompanyKey_(companyName) || "__empty__";
+      const isAllowedCandidate = Boolean(cleanupReason_(companyName));
+      if (selected[companyKey] && isAllowedCandidate) {
+        removed.push(row);
+        removedCompanies[companyName || "Empresa não informada"] = true;
+      } else {
+        keep.push(row);
+      }
+    });
+    if (!removed.length) return { ok: false, error: "nothing_to_cleanup" };
+
+    const backupSheet = createCleanupBackup_(headers, removed, "LIMPEZA");
+    replaceEventRows_(sheet, headers, keep);
+    return {
+      ok: true,
+      removedEvents: removed.length,
+      removedCompanies: Object.keys(removedCompanies),
+      backupSheet: backupSheet
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function mergeCompanies_(data) {
+  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
+  const merges = Array.isArray(data.merges) ? data.merges.slice(0, 50) : [];
+  if (!merges.length) return { ok: false, error: "no_merges_selected" };
+
+  const normalizedMerges = merges.map(function(item) {
+    return {
+      sourceName: String(item.sourceName || "").trim().replace(/\s+/g, " ").slice(0, 120),
+      targetName: String(item.targetName || "").trim().replace(/\s+/g, " ").slice(0, 120)
+    };
+  }).filter(function(item) {
+    return item.sourceName && item.targetName && item.sourceName.toLowerCase() !== item.targetName.toLowerCase() && !cleanupReason_(item.targetName);
+  });
+  if (!normalizedMerges.length) return { ok: false, error: "invalid_merges" };
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (err) {
+    return { ok: false, error: "merge_busy" };
+  }
+
+  try {
+    const sheet = getEventsSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const companyColumns = ["companyName", "empresa", "company"]
+      .map(function(header) { return headers.indexOf(header); })
+      .filter(function(index) { return index >= 0; });
+    const changedRows = [];
+    const mergeBySource = {};
+    normalizedMerges.forEach(function(item) { mergeBySource[item.sourceName.toLowerCase()] = item.targetName; });
+
+    values.slice(1).forEach(function(row) {
+      const companyName = getCompanyFromEventRow_(row, headers);
+      const targetName = mergeBySource[String(companyName || "").trim().replace(/\s+/g, " ").toLowerCase()];
+      if (!targetName || targetName.toLowerCase() === String(companyName || "").trim().toLowerCase()) return;
+      changedRows.push(row.slice());
+      companyColumns.forEach(function(columnIndex) { row[columnIndex] = targetName; });
+    });
+    if (!changedRows.length) return { ok: false, error: "nothing_to_merge" };
+
+    const backupSheet = createCleanupBackup_(headers, changedRows, "UNIFICACAO");
+    replaceEventRows_(sheet, headers, values.slice(1));
+    return { ok: true, mergedEvents: changedRows.length, backupSheet: backupSheet };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function clearEvents_(data) {
+  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
 
   const sheet = getEventsSheet_();
   const lastRow = sheet.getLastRow();
@@ -822,6 +1146,9 @@ function doPost(e) {
   if (action === "sync_reservations") return jsonOutput(syncReservations_(data));
   if (action === "quote_reservations") return jsonOutput(quoteReservations_(data));
   if (action === "release_reservations") return jsonOutput(releaseReservations_(data));
+  if (action === "upsert_crm_client") return jsonOutput(upsertCrmClient_(data));
+  if (action === "cleanup_selected_companies") return jsonOutput(cleanupSelectedCompanies_(data));
+  if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
@@ -835,6 +1162,8 @@ function doGet(e) {
   if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
   if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
   if (action === "reservations_admin") return jsonOutput(getAdminReservations_());
+  if (action === "crm_clients") return jsonOutput(readCrmClients_());
+  if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(e.parameter || {}));
 
   if (action === "track") {
@@ -842,5 +1171,5 @@ function doGet(e) {
     return jsonOutput(appendEvent_(params));
   }
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics V9.1 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 10 + Reservas V1" });
 }

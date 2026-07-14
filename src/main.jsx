@@ -244,6 +244,47 @@ function isAnonymousCompany(value) {
     company === "nao informada";
 }
 
+function companyKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function cleanupReason(value) {
+  const key = companyKey(value);
+  if (!key || ["nao identificado", "empresa nao informada", "nao informada", "anonimo", "visitante", "sem empresa"].includes(key)) {
+    return "Empresa não identificada";
+  }
+  if (key.split(" ").some((token) => /^(teste|testes|test|testing)\d*$/.test(token))) {
+    return "Nome de teste";
+  }
+  return "";
+}
+
+function duplicateCompanyKey(value) {
+  return companyKey(value)
+    .replace(/\b(ltda|eireli|mei|me|sa)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function crmStatusLabel(status) {
+  const labels = {
+    new: "Novo",
+    contact: "Em contato",
+    negotiation: "Negociação",
+    active: "Cliente ativo",
+    cold: "Frio",
+    lost: "Perdido"
+  };
+  return labels[status] || labels.new;
+}
+
 function percent(value) {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
@@ -294,6 +335,7 @@ function eventTimestamp(row) {
 function normalizeObjectEvent(row, index) {
   const event = normalizeEvent(readField(row, ["event", "acao", "type"], ""));
   const timestamp = eventTimestamp(row);
+  const companyRaw = String(readField(row, ["companyName", "empresa", "company", "cliente", "clientName", "nomeEmpresa"], "")).trim();
   const quantity = safeNumber(readField(row, ["quantity", "quantidade"]));
   const total = safeNumber(readField(row, ["total", "cart_total"]));
   const products = parseProducts(readField(row, ["products", "items", "productList"]));
@@ -306,7 +348,8 @@ function normalizeObjectEvent(row, index) {
     createdAt: timestamp,
     event,
     consultant: normalizeConsultant(readField(row, ["consultant", "consultor", "consultant_slug"])),
-    companyName: normalizeCompany(readField(row, ["companyName", "empresa", "company", "cliente", "clientName", "nomeEmpresa"])),
+    companyName: normalizeCompany(companyRaw),
+    companyRaw,
     clientId: readField(row, ["clientId", "clienteId", "customerId", "sessionId"], ""),
     sessionId: readField(row, ["sessionId"], ""),
     query: String(readField(row, ["query", "search_query", "busca"], "")).trim(),
@@ -446,6 +489,48 @@ async function fetchActiveReservations() {
   return rows.map(normalizeReservation);
 }
 
+async function fetchAnalyticsAction(action) {
+  const url = `${ANALYTICS_API_URL}?action=${encodeURIComponent(action)}&cache=${Date.now()}`;
+  const response = await fetch(url, { method: "GET", cache: "no-store" });
+  if (!response.ok) throw new Error(`Falha ao carregar ${action}.`);
+  const data = await response.json();
+  if (!data?.ok) throw new Error(data?.error || `Falha ao carregar ${action}.`);
+  return data;
+}
+
+async function postAnalyticsAction(action, payload = {}) {
+  const response = await fetch(ANALYTICS_API_URL, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ action, ...payload })
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok || !data?.ok) {
+    if (data?.error === "invalid_pin") throw new Error("PIN administrativo inválido.");
+    throw new Error(data?.error || "Não foi possível concluir a operação.");
+  }
+  return data;
+}
+
+async function fetchCrmClients() {
+  const data = await fetchAnalyticsAction("crm_clients");
+  return (Array.isArray(data.clients) ? data.clients : []).map((client) => ({
+    ...client,
+    companyKey: String(client.companyKey || ""),
+    companyName: normalizeCompany(client.companyName),
+    status: String(client.status || "new"),
+    owner: String(client.owner || ""),
+    nextContactAt: String(client.nextContactAt || ""),
+    tags: String(client.tags || ""),
+    notes: String(client.notes || "")
+  }));
+}
+
+async function fetchCleanupCandidates() {
+  const data = await fetchAnalyticsAction("cleanup_candidates");
+  return Array.isArray(data.candidates) ? data.candidates : [];
+}
+
 async function clearEvents(pin) {
   const body = JSON.stringify({ action: "clear_events", pin });
   const readResetError = (data, fallback) => {
@@ -471,12 +556,61 @@ async function clearEvents(pin) {
   }
 }
 
-function isSamePeriod(dateLike, selected) {
+function startOfDay(date) {
+  const value = new Date(date);
+  value.setHours(0, 0, 0, 0);
+  return value;
+}
+
+function endOfDay(date) {
+  const value = new Date(date);
+  value.setHours(23, 59, 59, 999);
+  return value;
+}
+
+function localDateInput(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function isSamePeriod(dateLike, selected, customStart = "", customEnd = "") {
   if (selected === "all") return true;
   const d = new Date(dateLike);
   const now = new Date();
   if (Number.isNaN(d.getTime())) return false;
   if (selected === "today") return d.toDateString() === now.toDateString();
+
+  if (selected === "yesterday") {
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    return d.toDateString() === yesterday.toDateString();
+  }
+
+  if (selected === "week") {
+    const start = startOfDay(now);
+    const weekday = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - weekday);
+    return d >= start && d <= now;
+  }
+
+  if (selected === "month") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return d >= start && d <= now;
+  }
+
+  if (selected === "last_month") {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    return d >= start && d <= end;
+  }
+
+  if (selected === "custom") {
+    const start = customStart ? startOfDay(`${customStart}T00:00:00`) : null;
+    const end = customEnd ? endOfDay(`${customEnd}T00:00:00`) : null;
+    if (start && d < start) return false;
+    if (end && d > end) return false;
+    return Boolean(start || end);
+  }
 
   const days = selected === "7d" ? 7 : 30;
   const cutoff = new Date(now);
@@ -508,6 +642,18 @@ function dateTime(value) {
     hour: "2-digit",
     minute: "2-digit"
   });
+}
+
+function crmContactDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T12:00:00`) : new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function dateOnly(value) {
+  const date = crmContactDate(value);
+  return date ? date.toLocaleDateString("pt-BR") : "-";
 }
 
 function timeOnly(value) {
@@ -736,13 +882,21 @@ function noResultDemandRows(events) {
 }
 
 
-function periodLabel(value) {
+function periodLabel(value, customStart = "", customEnd = "") {
   const labels = {
     today: "Hoje",
+    yesterday: "Ontem",
+    week: "Esta semana",
+    month: "Este mês",
+    last_month: "Mês anterior",
     "7d": "Últimos 7 dias",
     "30d": "Últimos 30 dias",
     all: "Tudo"
   };
+  if (value === "custom") {
+    const format = (date) => date ? new Date(`${date}T12:00:00`).toLocaleDateString("pt-BR") : "…";
+    return `${format(customStart)} até ${format(customEnd)}`;
+  }
   return labels[value] || value;
 }
 
@@ -1235,6 +1389,223 @@ function companyActivityRows(events) {
     });
 }
 
+function buildCrmRows(events, reservations, crmClients) {
+  const metadata = new Map(crmClients.map((client) => [companyKey(client.companyKey || client.companyName), client]));
+  const carts = new Map();
+  reservations.forEach((item) => {
+    const key = companyKey(item.company);
+    if (!key) return;
+    if (!carts.has(key)) carts.set(key, { reserved: 0, excess: 0, products: new Set() });
+    const cart = carts.get(key);
+    cart.reserved += item.reservedNumber;
+    cart.excess += item.excessNumber;
+    if (item.product) cart.products.add(item.product);
+  });
+
+  const map = new Map();
+  events.forEach((event) => {
+    const company = normalizeCompany(event.companyName);
+    if (isAnonymousCompany(company) || cleanupReason(company)) return;
+    const key = companyKey(company);
+    if (!map.has(key)) {
+      map.set(key, {
+        companyKey: key,
+        company,
+        consultant: normalizeConsultant(event.consultant).toUpperCase(),
+        totalActions: 0,
+        accesses: 0,
+        searches: 0,
+        noResults: 0,
+        productOpen: 0,
+        added: 0,
+        quotes: 0,
+        quoteTotalNumber: 0,
+        score: 0,
+        days: new Set(),
+        products: new Map(),
+        lastEventRaw: ""
+      });
+    }
+    const row = map.get(key);
+    row.totalActions++;
+    row.score += commercialEventScore(event);
+    if (event.event === "page_view") row.accesses++;
+    if (event.event === "search" || event.event === "search_no_results") row.searches++;
+    if (event.event === "search_no_results") row.noResults++;
+    if (event.event === "product_open") row.productOpen++;
+    if (event.event === "add_to_cart") row.added += productQuantity(productFromEvent(event), event.quantity || 1);
+    if (event.event === "whatsapp_quote") {
+      row.quotes++;
+      row.quoteTotalNumber += safeNumber(event.cartTotal || event.total);
+    }
+    const date = new Date(event.timestamp);
+    if (!Number.isNaN(date.getTime())) {
+      row.days.add(date.toDateString());
+      if (!row.lastEventRaw || date > new Date(row.lastEventRaw)) {
+        row.lastEventRaw = event.timestamp;
+        row.consultant = normalizeConsultant(event.consultant).toUpperCase();
+      }
+    }
+    const product = productFromEvent(event);
+    const label = productLabel(product);
+    if (label !== "Produto não informado") {
+      row.products.set(label, (row.products.get(label) || 0) + Math.max(1, productQuantity(product, 1)));
+    }
+  });
+
+  reservations.forEach((item) => {
+    const company = normalizeCompany(item.company);
+    if (isAnonymousCompany(company) || cleanupReason(company)) return;
+    const key = companyKey(company);
+    if (map.has(key)) return;
+    map.set(key, {
+      companyKey: key,
+      company,
+      consultant: normalizeConsultant(item.consultant).toUpperCase(),
+      totalActions: 0,
+      accesses: 0,
+      searches: 0,
+      noResults: 0,
+      productOpen: 0,
+      added: 0,
+      quotes: 0,
+      quoteTotalNumber: 0,
+      score: 0,
+      days: new Set(),
+      products: new Map(),
+      lastEventRaw: ""
+    });
+  });
+
+  return [...map.values()].map((row) => {
+    const meta = metadata.get(row.companyKey) || {};
+    const cart = carts.get(row.companyKey) || { reserved: 0, excess: 0, products: new Set() };
+    const topProducts = [...row.products.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);
+    const statusKey = String(meta.status || (cart.reserved ? "negotiation" : row.quotes ? "active" : "new"));
+    return {
+      ...row,
+      id: `crm-${row.companyKey}`,
+      statusKey,
+      status: crmStatusLabel(statusKey),
+      owner: meta.owner ? normalizeConsultant(meta.owner).toUpperCase() : row.consultant,
+      nextContactAt: String(meta.nextContactAt || ""),
+      nextContact: meta.nextContactAt ? dateOnly(meta.nextContactAt) : "-",
+      tags: String(meta.tags || ""),
+      notes: String(meta.notes || ""),
+      activeCartQty: cart.reserved,
+      cartExcessQty: cart.excess,
+      activeCartProducts: [...cart.products].slice(0, 8),
+      topProducts,
+      activeDays: row.days.size,
+      quoteRate: percent(row.productOpen ? row.quotes / row.productOpen : 0),
+      quoteTotal: money(row.quoteTotalNumber),
+      lastEvent: row.lastEventRaw ? dateTime(row.lastEventRaw) : "-",
+      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.tags, ...topProducts].join(" ").toLowerCase()
+    };
+  }).sort((a, b) => b.score - a.score || new Date(b.lastEventRaw) - new Date(a.lastEventRaw));
+}
+
+function buildOpportunityRows(crmRows, events) {
+  const eventSignals = new Map();
+  events.forEach((event) => {
+    const key = companyKey(event.companyName);
+    if (!key || cleanupReason(event.companyName)) return;
+    if (!eventSignals.has(key)) eventSignals.set(key, { lastAdd: 0, lastQuote: 0, lastNoResult: "", lastProduct: "" });
+    const signal = eventSignals.get(key);
+    const timestamp = new Date(event.timestamp).getTime() || 0;
+    if (event.event === "add_to_cart") signal.lastAdd = Math.max(signal.lastAdd, timestamp);
+    if (event.event === "whatsapp_quote") signal.lastQuote = Math.max(signal.lastQuote, timestamp);
+    if (event.event === "search_no_results") signal.lastNoResult = event.query || signal.lastNoResult;
+    const label = productLabel(productFromEvent(event));
+    if (label !== "Produto não informado") signal.lastProduct = label;
+  });
+
+  return crmRows.map((client) => {
+    const signal = eventSignals.get(client.companyKey) || {};
+    let priority = 0;
+    let level = "medium";
+    let reason = "";
+    if (client.cartExcessQty > 0) {
+      priority = 110;
+      level = "urgent";
+      reason = `${client.cartExcessQty} unidade(s) acima do estoque aguardando atendimento`;
+    } else if (client.activeCartQty > 0) {
+      priority = 100;
+      level = "hot";
+      reason = `Carrinho ativo com ${client.activeCartQty} unidade(s) reservada(s)`;
+    } else if ((signal.lastAdd || 0) > (signal.lastQuote || 0)) {
+      priority = 90;
+      level = "hot";
+      reason = "Adicionou produtos, mas ainda não enviou cotação";
+    } else if (signal.lastQuote && Date.now() - signal.lastQuote <= 3 * 86400000) {
+      priority = 80;
+      level = "high";
+      reason = `Cotação recente de ${money(client.quoteTotalNumber)}`;
+    } else if (signal.lastNoResult) {
+      priority = 70;
+      level = "high";
+      reason = `Não encontrou: ${signal.lastNoResult}`;
+    } else if (client.productOpen >= 3 && !client.quotes) {
+      priority = 60;
+      reason = `${client.productOpen} produtos abertos sem cotação`;
+    } else if (client.lastEventRaw && Date.now() - new Date(client.lastEventRaw).getTime() >= 15 * 86400000) {
+      priority = 30;
+      level = "cold";
+      reason = "Cliente sem atividade há mais de 15 dias";
+    }
+    return {
+      ...client,
+      priority,
+      level,
+      reason,
+      interest: client.activeCartProducts[0] || signal.lastProduct || client.topProducts[0] || "-"
+    };
+  }).filter((row) => row.reason).sort((a, b) => b.priority - a.priority || b.score - a.score);
+}
+
+function buildCleanupCandidates(events) {
+  const map = new Map();
+  events.forEach((event) => {
+    const rawName = String(event.companyRaw ?? event.companyName ?? "").trim();
+    const name = normalizeCompany(rawName);
+    const reason = cleanupReason(rawName);
+    if (!reason) return;
+    const key = companyKey(rawName);
+    const mapKey = key || "__empty__";
+    if (!map.has(mapKey)) map.set(mapKey, { companyKey: key, companyName: name, reason, eventCount: 0, firstAt: "", lastAt: "" });
+    const item = map.get(mapKey);
+    item.eventCount++;
+    if (!item.firstAt || new Date(event.timestamp) < new Date(item.firstAt)) item.firstAt = event.timestamp;
+    if (!item.lastAt || new Date(event.timestamp) > new Date(item.lastAt)) item.lastAt = event.timestamp;
+  });
+  return [...map.values()].sort((a, b) => b.eventCount - a.eventCount);
+}
+
+function buildDuplicateCompanyGroups(events) {
+  const names = new Map();
+  events.forEach((event) => {
+    const name = normalizeCompany(event.companyName);
+    if (cleanupReason(name)) return;
+    if (!names.has(name)) names.set(name, 0);
+    names.set(name, names.get(name) + 1);
+  });
+  const groups = new Map();
+  names.forEach((count, name) => {
+    const key = duplicateCompanyKey(name);
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ name, count, companyKey: companyKey(name) });
+  });
+  return [...groups.entries()].map(([key, variants]) => {
+    const sortedVariants = variants.sort((a, b) => b.count - a.count);
+    return {
+      key,
+      variants: sortedVariants,
+      targetName: sortedVariants[0]?.name || ""
+    };
+  }).filter((group) => group.variants.length > 1);
+}
+
 function consultantActivityRows(events) {
   const map = new Map();
 
@@ -1569,10 +1940,19 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(() => window.localStorage.getItem(AUTH_STORAGE_KEY) === "true");
   const [events, setEvents] = useState([]);
   const [reservations, setReservations] = useState([]);
+  const [crmClients, setCrmClients] = useState([]);
   const [status, setStatus] = useState("Carregando eventos reais...");
   const [period, setPeriod] = useState("today");
+  const [dateFrom, setDateFrom] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 30);
+    return localDateInput(date);
+  });
+  const [dateTo, setDateTo] = useState(() => localDateInput(new Date()));
   const [consultant, setConsultant] = useState("all");
   const [company, setCompany] = useState("all");
+  const [eventFilter, setEventFilter] = useState("all");
+  const [productFilter, setProductFilter] = useState("");
   const [adminPin, setAdminPin] = useState("");
   const [resetStatus, setResetStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1580,6 +1960,11 @@ function App() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [toast, setToast] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
+  const [selectedClient, setSelectedClient] = useState(null);
+  const [selectedCleanupKeys, setSelectedCleanupKeys] = useState([]);
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [isSavingCrm, setIsSavingCrm] = useState(false);
+  const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
 
   async function load(options = {}) {
@@ -1587,18 +1972,21 @@ function App() {
     if (!silent) setStatus("Carregando eventos reais...");
     setIsLoading(true);
     try {
-      const [data, activeReservations] = await Promise.all([
+      const [data, activeReservations, savedCrmClients] = await Promise.all([
         fetchEvents(),
-        fetchActiveReservations().catch(() => [])
+        fetchActiveReservations().catch(() => []),
+        fetchCrmClients().catch(() => [])
       ]);
       setEvents(data);
       setReservations(activeReservations);
+      setCrmClients(savedCrmClients);
       setLastUpdatedAt(new Date());
       const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
       setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
     } catch (error) {
       setEvents([]);
       setReservations([]);
+      setCrmClients([]);
       setStatus(error.message || "Não consegui carregar os eventos.");
     } finally {
       setIsLoading(false);
@@ -1639,13 +2027,25 @@ function App() {
     return ["all", ...names];
   }, [events, reservations]);
 
-  const periodFiltered = useMemo(() => events.filter((event) => isSamePeriod(event.createdAt, period)), [events, period]);
+  const periodFiltered = useMemo(() => events.filter((event) => (
+    isSamePeriod(event.createdAt, period, dateFrom, dateTo)
+  )), [events, period, dateFrom, dateTo]);
 
   const filtered = useMemo(() => periodFiltered.filter((event) => {
     const okConsultant = consultant === "all" || normalizeConsultant(event.consultant) === consultant;
     const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
-    return okConsultant && okCompany;
-  }), [periodFiltered, consultant, company]);
+    const okEvent = eventFilter === "all" || event.event === eventFilter;
+    const productNeedle = productFilter.trim().toLowerCase();
+    const productHaystack = [
+      event.productCode,
+      event.productName,
+      event.brand,
+      event.query,
+      ...quoteProducts(event).flatMap((product) => [product.productCode, product.productName, product.brand])
+    ].filter(Boolean).join(" ").toLowerCase();
+    const okProduct = !productNeedle || productHaystack.includes(productNeedle);
+    return okConsultant && okCompany && okEvent && okProduct;
+  }), [periodFiltered, consultant, company, eventFilter, productFilter]);
 
   const filteredReservations = useMemo(() => reservations.filter((item) => {
     const okConsultant = consultant === "all" || normalizeConsultant(item.consultant) === consultant;
@@ -1727,6 +2127,10 @@ function App() {
   const companySearchRank = useMemo(() => countBy(allSearchEvents, (event) => normalizeCompany(event.companyName)), [allSearchEvents]);
   const companyQuoteRank = useMemo(() => countBy(byType.quotes, (event) => normalizeCompany(event.companyName)), [byType.quotes]);
   const companyActivity = useMemo(() => companyActivityRows(filtered), [filtered]);
+  const crmRows = useMemo(() => buildCrmRows(filtered, filteredReservations, crmClients), [filtered, filteredReservations, crmClients]);
+  const opportunityRows = useMemo(() => buildOpportunityRows(crmRows, filtered), [crmRows, filtered]);
+  const cleanupCandidates = useMemo(() => buildCleanupCandidates(events), [events]);
+  const duplicateCompanyGroups = useMemo(() => buildDuplicateCompanyGroups(events), [events]);
 
   const searchRank = useMemo(() => countBy(allSearchEvents, (event) => event.query.toLowerCase()), [allSearchEvents]);
   const noResultRank = useMemo(() => countBy(byType.noResults, (event) => event.query.toLowerCase()), [byType.noResults]);
@@ -1777,8 +2181,16 @@ function App() {
   const offerQuoteEvents = useMemo(() => byType.quotes.filter((event) => event.specialOfferId), [byType.quotes]);
   const offerQuoteTotal = useMemo(() => offerQuoteEvents.reduce((sum, event) => sum + safeNumber(event.cartTotal || event.total), 0), [offerQuoteEvents]);
   const identifiedCompanies = useMemo(() => new Set(
-    filtered.map((event) => normalizeCompany(event.companyName)).filter((name) => !isAnonymousCompany(name))
+    filtered.map((event) => normalizeCompany(event.companyName)).filter((name) => !isAnonymousCompany(name) && !cleanupReason(name))
   ).size, [filtered]);
+
+  useEffect(() => {
+    const availableKeys = cleanupCandidates.map((item) => item.companyKey || "__empty__");
+    setSelectedCleanupKeys((current) => {
+      const retained = current.filter((key) => availableKeys.includes(key));
+      return retained.length ? retained : availableKeys;
+    });
+  }, [cleanupCandidates]);
 
   const funnel = [
     ["Acessos", kpis.pageViews],
@@ -1919,6 +2331,106 @@ function App() {
     });
   }
 
+  function openClientProfile(client) {
+    setSelectedClient(client);
+  }
+
+  async function saveClientProfile(form) {
+    setIsSavingCrm(true);
+    try {
+      const saved = await postAnalyticsAction("upsert_crm_client", form);
+      const normalized = {
+        ...saved.client,
+        companyKey: String(saved.client.companyKey || companyKey(form.companyName)),
+        companyName: normalizeCompany(saved.client.companyName || form.companyName)
+      };
+      setCrmClients((current) => [normalized, ...current.filter((item) => companyKey(item.companyKey || item.companyName) !== normalized.companyKey)]);
+      setSelectedClient((current) => current ? {
+        ...current,
+        statusKey: normalized.status,
+        status: crmStatusLabel(normalized.status),
+        owner: normalized.owner ? normalizeConsultant(normalized.owner).toUpperCase() : current.owner,
+        nextContactAt: normalized.nextContactAt,
+        nextContact: normalized.nextContactAt ? dateOnly(normalized.nextContactAt) : "-",
+        tags: normalized.tags,
+        notes: normalized.notes
+      } : current);
+      showToast("Ficha CRM salva com sucesso.");
+      return normalized;
+    } catch (error) {
+      showToast(error.message || "Não foi possível salvar a ficha CRM.", "error");
+      throw error;
+    } finally {
+      setIsSavingCrm(false);
+    }
+  }
+
+  function exportCleanupBackup() {
+    const selectedSet = new Set(selectedCleanupKeys);
+    const sourceEvents = events.filter((event) => {
+      const rawName = String(event.companyRaw ?? event.companyName ?? "").trim();
+      const key = companyKey(rawName) || "__empty__";
+      return selectedSet.has(key) && cleanupReason(rawName);
+    });
+    const raw = rawEventRows(sourceEvents);
+    exportRowsCsv({
+      fileName: `zconnect-backup-limpeza-${fileDateStamp()}.csv`,
+      columns: raw.columns,
+      rows: raw.rows
+    });
+    showToast(`Backup CSV gerado com ${sourceEvents.length} eventos.`);
+  }
+
+  async function handleSelectiveCleanup() {
+    if (!selectedCleanupKeys.length) {
+      showToast("Selecione pelo menos uma empresa para limpar.", "error");
+      return;
+    }
+    const selectedCandidates = cleanupCandidates.filter((item) => selectedCleanupKeys.includes(item.companyKey || "__empty__"));
+    const totalEvents = selectedCandidates.reduce((sum, item) => sum + item.eventCount, 0);
+    const confirmed = window.confirm(`Excluir ${totalEvents} eventos de ${selectedCandidates.length} empresa(s) de teste/não identificadas? Um backup será criado na planilha.`);
+    if (!confirmed) return;
+
+    setIsCleaning(true);
+    setQualityStatus("Criando backup e removendo somente os registros selecionados...");
+    try {
+      const result = await postAnalyticsAction("cleanup_selected_companies", {
+        pin: adminPin.trim(),
+        companyKeys: selectedCleanupKeys.map((key) => key === "__empty__" ? "" : key)
+      });
+      setQualityStatus(`${result.removedEvents} eventos removidos. Backup: ${result.backupSheet}.`);
+      showToast(`${result.removedEvents} eventos de teste removidos com segurança.`);
+      setSelectedCleanupKeys([]);
+      await load({ silent: true });
+    } catch (error) {
+      setQualityStatus(error.message || "Falha ao limpar os dados.");
+      showToast(error.message || "Falha ao limpar os dados.", "error");
+    } finally {
+      setIsCleaning(false);
+    }
+  }
+
+  async function handleMergeDuplicates() {
+    const merges = duplicateCompanyGroups.flatMap((group) => group.variants
+      .filter((variant) => variant.name !== group.targetName)
+      .map((variant) => ({ sourceName: variant.name, targetName: group.targetName })));
+    if (!merges.length) return;
+    if (!window.confirm(`Unificar ${merges.length} variação(ões) de nomes? Um backup será criado antes da alteração.`)) return;
+    setIsCleaning(true);
+    setQualityStatus("Criando backup e unificando nomes duplicados...");
+    try {
+      const result = await postAnalyticsAction("merge_companies", { pin: adminPin.trim(), merges });
+      setQualityStatus(`${result.mergedEvents} eventos padronizados. Backup: ${result.backupSheet}.`);
+      showToast("Nomes duplicados unificados com segurança.");
+      await load({ silent: true });
+    } catch (error) {
+      setQualityStatus(error.message || "Falha ao unificar empresas.");
+      showToast(error.message || "Falha ao unificar empresas.", "error");
+    } finally {
+      setIsCleaning(false);
+    }
+  }
+
   function exportRawCsv() {
     const raw = rawEventRows(filtered);
     exportRowsCsv({
@@ -1942,7 +2454,7 @@ function App() {
     const summaryRows = [
       ...sheetTitle("Z Connect - Relatório Executivo", "Relatório gerado automaticamente pelo dashboard Analytics."),
       { values: ["Gerado em", dateTime(new Date())] },
-      { values: ["Período", periodLabel(period)] },
+      { values: ["Período", periodLabel(period, dateFrom, dateTo)] },
       { values: ["Consultor", selectedConsultant] },
       { values: ["Empresa", selectedCompany] },
       { values: ["Eventos considerados", filtered.length] },
@@ -2052,13 +2564,30 @@ function App() {
 
   const navigation = [
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
-    { id: "companies", label: "Clientes", icon: <Building2 size={17}/> },
+    { id: "opportunities", label: "Oportunidades", icon: <AlertTriangle size={17}/>, badge: opportunityRows.filter((item) => item.priority >= 80).length },
+    { id: "crm", label: "Clientes CRM", icon: <Building2 size={17}/>, badge: crmRows.length },
     { id: "products", label: "Produtos", icon: <Flame size={17}/> },
     { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
     { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
+    { id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length },
     { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
   ];
   const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
+  const viewDescriptions = {
+    overview: "Os números essenciais para decidir rápido.",
+    opportunities: "Clientes que pedem uma ação comercial agora, ordenados por urgência.",
+    crm: "Histórico, responsável, etapa e próximo contato de cada cliente real.",
+    products: "Demanda real, intenção de compra e lacunas do catálogo.",
+    carts: "O que os clientes estão separando agora, com reserva e excedente em tempo real.",
+    offers: "Do link especial criado até a cotação enviada.",
+    quality: "Limpeza seletiva, prévia e padronização dos dados sem apagar empresas reais.",
+    events: "Histórico detalhado dos eventos do catálogo."
+  };
+  const dueFollowUps = crmRows.filter((item) => {
+    const contactDate = crmContactDate(item.nextContactAt);
+    return contactDate && contactDate.getTime() <= endOfDay(new Date()).getTime();
+  }).length;
+  const negotiationClients = crmRows.filter((item) => item.statusKey === "negotiation").length;
 
   return (
     <main className="app analytics-app">
@@ -2088,9 +2617,23 @@ function App() {
         <div className="analytics-filters">
           <label><CalendarDays size={14}/> Período
             <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-              <option value="today">Hoje</option><option value="7d">7 dias</option><option value="30d">30 dias</option><option value="all">Tudo</option>
+              <option value="today">Hoje</option>
+              <option value="yesterday">Ontem</option>
+              <option value="week">Esta semana</option>
+              <option value="month">Este mês</option>
+              <option value="last_month">Mês anterior</option>
+              <option value="7d">Últimos 7 dias</option>
+              <option value="30d">Últimos 30 dias</option>
+              <option value="custom">Escolher datas</option>
+              <option value="all">Todo o histórico</option>
             </select>
           </label>
+          {period === "custom" ? (
+            <div className="custom-date-range">
+              <label>De <input type="date" value={dateFrom} max={dateTo || undefined} onChange={(event) => setDateFrom(event.target.value)}/></label>
+              <label>Até <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)}/></label>
+            </div>
+          ) : null}
           <label><UserCheck size={14}/> Consultor
             <select value={consultant} onChange={(event) => setConsultant(event.target.value)}>
               {consultants.map((item) => <option key={item} value={item}>{item === "all" ? "Todos" : item.toUpperCase()}</option>)}
@@ -2101,6 +2644,20 @@ function App() {
               {companies.map((item) => <option key={item} value={item}>{item === "all" ? "Todas" : item}</option>)}
             </select>
           </label>
+          <label><Filter size={14}/> Evento
+            <select value={eventFilter} onChange={(event) => setEventFilter(event.target.value)}>
+              <option value="all">Todos</option>
+              {Object.entries(EVENT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <label className="product-filter"><Search size={14}/> Produto ou busca
+            <input value={productFilter} onChange={(event) => setProductFilter(event.target.value)} placeholder="código, peça ou termo"/>
+          </label>
+          {(period !== "today" || consultant !== "all" || company !== "all" || eventFilter !== "all" || productFilter) ? (
+            <button type="button" className="filter-reset" onClick={() => {
+              setPeriod("today"); setConsultant("all"); setCompany("all"); setEventFilter("all"); setProductFilter("");
+            }}><X size={14}/> Limpar filtros</button>
+          ) : null}
         </div>
       </section>
 
@@ -2114,10 +2671,10 @@ function App() {
 
       <section className="analytics-view-head">
         <div><span>Área atual</span><h2>{currentView.label}</h2></div>
-        <p>{activeView === "overview" ? "Os números essenciais para decidir rápido." : activeView === "companies" ? "Quem está comprando, pesquisando ou perdendo interesse." : activeView === "products" ? "Demanda real, intenção de compra e lacunas do catálogo." : activeView === "carts" ? "O que os clientes estão separando agora, com reserva e excedente em tempo real." : activeView === "offers" ? "Do link especial criado até a cotação enviada." : "Histórico detalhado e administração dos dados."}</p>
+        <p>{viewDescriptions[activeView]}</p>
       </section>
 
-      {activeView !== "carts" && !filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
+      {!["carts", "quality"].includes(activeView) && !filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
 
       {activeView === "overview" ? (
         <div className="view-stack">
@@ -2147,23 +2704,27 @@ function App() {
         </div>
       ) : null}
 
-      {activeView === "companies" ? (
+      {activeView === "opportunities" ? (
         <div className="view-stack">
           <StatGrid items={[
-            { icon: <Building2/>, label: "Identificados", value: identifiedCompanies, onOpen: openCompanyModal },
-            { icon: <Search/>, label: "Empresas pesquisando", value: companySearchRank.length, onOpen: () => openSearchModal("Buscas por empresa", allSearchEvents) },
-            { icon: <Send/>, label: "Empresas cotando", value: companyQuoteRank.length, onOpen: () => openQuoteModal("Empresas que cotaram") },
-            { icon: <AlertTriangle/>, label: "Perdendo atividade", value: dormantCompanies.length, onOpen: openDormantCompanyModal }
+            { icon: <Flame/>, label: "Ação imediata", value: opportunityRows.filter((item) => item.priority >= 100).length, emphasis: true },
+            { icon: <ShoppingCart/>, label: "Carrinho sem cotação", value: opportunityRows.filter((item) => item.priority === 90 || item.activeCartQty > 0).length },
+            { icon: <Search/>, label: "Demanda não atendida", value: opportunityRows.filter((item) => item.priority === 70).length },
+            { icon: <CalendarDays/>, label: "Retornos vencidos", value: dueFollowUps, emphasis: true }
           ]}/>
-          <section className="overview-grid">
-            <MetricTable title="Ranking de clientes" subtitle="Score de acesso, busca, produto, carrinho e cotação" rows={companyActivity.filter((row) => !isAnonymousCompany(row.company)).slice(0, 20)} columns={COMPANY_COMMERCIAL_COLUMNS.slice(1, 7)} empty={EMPTY_LIST_MESSAGE} icon={<Building2 size={18}/>} onOpen={openCompanyModal}/>
-            <MetricTable title="Clientes esfriando" subtitle="Queda recente de atividade comercial" rows={dormantCompanies} columns={DORMANT_COMPANY_COLUMNS.slice(1, 6)} empty="Ainda não há histórico suficiente para apontar queda." icon={<AlertTriangle size={18}/>} onOpen={openDormantCompanyModal}/>
-          </section>
-          <section className="columns three-columns">
-            <Rank title="Mais ativos" rows={companyActiveRank} onOpen={openCompanyModal}/>
-            <Rank title="Mais pesquisaram" rows={companySearchRank} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
-            <Rank title="Mais cotaram" rows={companyQuoteRank} onOpen={() => openQuoteModal("Cotações por empresa")}/>
-          </section>
+          <OpportunityList rows={opportunityRows} onOpen={openClientProfile}/>
+        </div>
+      ) : null}
+
+      {activeView === "crm" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Building2/>, label: "Clientes reais", value: crmRows.length },
+            { icon: <TrendingUp/>, label: "Em negociação", value: negotiationClients, emphasis: true },
+            { icon: <CalendarDays/>, label: "Próximos contatos vencidos", value: dueFollowUps },
+            { icon: <Send/>, label: "Valor cotado", value: money(crmRows.reduce((sum, item) => sum + item.quoteTotalNumber, 0)), emphasis: true }
+          ]}/>
+          <ClientCrmTable rows={crmRows} onOpen={openClientProfile}/>
         </div>
       ) : null}
 
@@ -2245,6 +2806,62 @@ function App() {
         </div>
       ) : null}
 
+      {activeView === "quality" ? (
+        <div className="view-stack quality-view">
+          <StatGrid items={[
+            { icon: <AlertTriangle/>, label: "Nomes de teste/não identificados", value: cleanupCandidates.length },
+            { icon: <Trash2/>, label: "Eventos candidatos", value: cleanupCandidates.reduce((sum, item) => sum + item.eventCount, 0) },
+            { icon: <Building2/>, label: "Empresas reais preservadas", value: new Set(events.map((event) => normalizeCompany(event.companyName)).filter((name) => !cleanupReason(name))).size, emphasis: true },
+            { icon: <Filter/>, label: "Grupos possivelmente duplicados", value: duplicateCompanyGroups.length }
+          ]}/>
+          <section className="quality-grid">
+            <article className="panel cleanup-panel">
+              <div className="panel-head">
+                <div><h2><Eraser size={18}/> Limpeza seletiva segura</h2><p>Somente nomes reconhecidos como teste ou acesso não identificado podem ser excluídos.</p></div>
+                <span>{selectedCleanupKeys.length} selecionado(s)</span>
+              </div>
+              <div className="quality-actions">
+                <button type="button" className="refresh" onClick={() => setSelectedCleanupKeys(cleanupCandidates.map((item) => item.companyKey || "__empty__"))}>Selecionar todos</button>
+                <button type="button" className="refresh" onClick={() => setSelectedCleanupKeys([])}>Desmarcar</button>
+                <button type="button" className="refresh" onClick={exportCleanupBackup} disabled={!selectedCleanupKeys.length}><Download size={15}/> Backup CSV</button>
+              </div>
+              <div className="cleanup-list">
+                {cleanupCandidates.length ? cleanupCandidates.map((item) => {
+                  const key = item.companyKey || "__empty__";
+                  return (
+                    <label className="cleanup-row" key={key}>
+                      <input type="checkbox" checked={selectedCleanupKeys.includes(key)} onChange={(event) => setSelectedCleanupKeys((current) => event.target.checked ? [...new Set([...current, key])] : current.filter((value) => value !== key))}/>
+                      <span><strong>{item.companyName || "Sem empresa informada"}</strong><small>{item.reason} · {dateTime(item.lastAt)}</small></span>
+                      <b>{item.eventCount} eventos</b>
+                    </label>
+                  );
+                }) : <EmptyState message="Nenhum dado de teste ou não identificado foi encontrado."/>}
+              </div>
+              <div className="quality-confirm">
+                <label className="admin-pin">PIN administrativo <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="Informe se configurado" disabled={isCleaning}/></label>
+                <button className="danger-button" type="button" onClick={handleSelectiveCleanup} disabled={isCleaning || !selectedCleanupKeys.length}>{isCleaning ? <RefreshCw className="spin" size={17}/> : <Trash2 size={17}/>} Excluir somente selecionados</button>
+              </div>
+              <p className="quality-note"><strong>Proteção:</strong> antes de excluir, o servidor cria uma aba de backup na planilha. Empresas reais são recusadas mesmo que sejam enviadas por engano.</p>
+            </article>
+
+            <article className="panel duplicates-panel">
+              <div className="panel-head"><div><h2><Building2 size={18}/> Possíveis duplicidades</h2><p>Variações de pontuação, acento ou razão social.</p></div><span>{duplicateCompanyGroups.length} grupos</span></div>
+              <div className="duplicate-list">
+                {duplicateCompanyGroups.length ? duplicateCompanyGroups.map((group) => (
+                  <div className="duplicate-row" key={group.key}>
+                    <strong>Nome principal: {group.targetName}</strong>
+                    <span>{group.variants.map((variant) => `${variant.name} (${variant.count})`).join(" · ")}</span>
+                  </div>
+                )) : <EmptyState message="Nenhuma possível duplicidade detectada."/>}
+              </div>
+              <button className="refresh merge-button" type="button" onClick={handleMergeDuplicates} disabled={isCleaning || !duplicateCompanyGroups.length}><Filter size={16}/> Unificar nomes sugeridos</button>
+              <p className="quality-note">A versão com mais eventos vira o nome principal. Um backup separado também é criado antes dessa alteração.</p>
+            </article>
+          </section>
+          {qualityStatus ? <div className="quality-status" role="status">{qualityStatus}</div> : null}
+        </div>
+      ) : null}
+
       {activeView === "events" ? (
         <div className="view-stack">
           <section className="panel">
@@ -2258,18 +2875,26 @@ function App() {
             </div>
           </section>
           <details className="admin-details">
-            <summary>Administração e exportação técnica</summary>
+            <summary>Exportação técnica</summary>
             <div className="admin-details-content">
               <button type="button" className="refresh" onClick={exportRawCsv}><Download size={16}/> Exportar CSV bruto</button>
-              {ADMIN_PIN ? <label className="admin-pin">PIN <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" disabled={isResetting}/></label> : null}
-              <button className="danger-button" type="button" onClick={handleReset} disabled={isResetting}>{isResetting ? <RefreshCw className="spin" size={17}/> : <Eraser size={17}/>} {isResetting ? "Limpando..." : "Limpar dados de teste"}</button>
-              {resetStatus ? <small>{resetStatus}</small> : null}
+              <small>A limpeza segura e seletiva fica na área Qualidade.</small>
             </div>
           </details>
         </div>
       ) : null}
 
       {activeModal ? <HistoryModal key={activeModal.id} modal={activeModal} onClose={() => setActiveModal(null)}/> : null}
+      {selectedClient ? (
+        <ClientProfileModal
+          client={selectedClient}
+          events={events.filter((event) => companyKey(event.companyName) === selectedClient.companyKey)}
+          reservations={reservations.filter((item) => companyKey(item.company) === selectedClient.companyKey)}
+          onClose={() => setSelectedClient(null)}
+          onSave={saveClientProfile}
+          isSaving={isSavingCrm}
+        />
+      ) : null}
       {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
     </main>
   );
@@ -2529,6 +3154,152 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
         )) : <EmptyState message={empty} />}
       </div>
     </article>
+  );
+}
+
+function OpportunityList({ rows = [], onOpen }) {
+  const [level, setLevel] = useState("all");
+  const [query, setQuery] = useState("");
+  const visibleRows = rows.filter((row) => {
+    const matchesLevel = level === "all" || row.level === level || (level === "priority" && row.priority >= 80);
+    const needle = query.trim().toLowerCase();
+    const matchesQuery = !needle || [row.company, row.reason, row.interest, row.owner].join(" ").toLowerCase().includes(needle);
+    return matchesLevel && matchesQuery;
+  });
+
+  return (
+    <article className="panel opportunity-panel">
+      <div className="panel-head opportunity-head">
+        <div><h2><AlertTriangle size={18}/> Fila comercial inteligente</h2><p>Ordenada pela chance e urgência. Abra um cliente para registrar o próximo passo.</p></div>
+        <span>{visibleRows.length} oportunidade(s)</span>
+      </div>
+      <div className="table-tools">
+        <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, peça ou motivo"/></label>
+        <label><Filter size={14}/> Prioridade
+          <select value={level} onChange={(event) => setLevel(event.target.value)}>
+            <option value="all">Todas</option><option value="priority">Alta ou urgente</option><option value="urgent">Urgente</option><option value="hot">Quente</option><option value="high">Alta</option><option value="medium">Média</option><option value="cold">Reativação</option>
+          </select>
+        </label>
+      </div>
+      <div className="opportunity-list">
+        {visibleRows.length ? visibleRows.map((row) => (
+          <button type="button" className="opportunity-row" key={row.id} onClick={() => onOpen(row)}>
+            <span className={`priority-dot ${row.level}`}>{row.priority}</span>
+            <span className="opportunity-client"><strong>{row.company}</strong><small>{row.owner || "Sem responsável"} · último sinal {row.lastEvent}</small></span>
+            <span className="opportunity-reason"><strong>{row.reason}</strong><small>Interesse: {row.interest}</small></span>
+            <span className={`crm-status status-${row.statusKey}`}>{row.status}</span>
+            <span className="row-open">Ver cliente →</span>
+          </button>
+        )) : <EmptyState message="Nenhuma oportunidade corresponde aos filtros atuais."/>}
+      </div>
+    </article>
+  );
+}
+
+function ClientCrmTable({ rows = [], onOpen }) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const visibleRows = rows.filter((row) => {
+    const needle = query.trim().toLowerCase();
+    return (status === "all" || row.statusKey === status) && (!needle || row._search.includes(needle));
+  });
+
+  return (
+    <article className="panel crm-table-panel">
+      <div className="panel-head">
+        <div><h2><Building2 size={18}/> Carteira de clientes</h2><p>Clique em qualquer linha para abrir histórico, anotações e próximo contato.</p></div>
+        <span>{visibleRows.length} cliente(s)</span>
+      </div>
+      <div className="table-tools">
+        <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, responsável ou tag"/></label>
+        <label><Filter size={14}/> Etapa
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="all">Todas</option><option value="new">Novo</option><option value="contact">Contato</option><option value="negotiation">Negociação</option><option value="active">Ativo</option><option value="cold">Frio</option><option value="lost">Perdido</option>
+          </select>
+        </label>
+      </div>
+      <div className="crm-table-wrap">
+        <table className="crm-table">
+          <thead><tr><th>Cliente</th><th>Etapa</th><th>Responsável</th><th>Score</th><th>Carrinho</th><th>Cotações</th><th>Valor cotado</th><th>Próximo contato</th></tr></thead>
+          <tbody>
+            {visibleRows.map((row) => (
+              <tr key={row.id} tabIndex="0" onClick={() => onOpen(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(row); }}>
+                <td><strong>{row.company}</strong><small>{row.lastEvent}</small></td>
+                <td><span className={`crm-status status-${row.statusKey}`}>{row.status}</span></td>
+                <td>{row.owner || "-"}</td><td>{row.score}</td><td>{row.activeCartQty || "-"}</td><td>{row.quotes}</td><td>{row.quoteTotal}</td><td>{row.nextContact}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {!visibleRows.length ? <EmptyState message="Nenhum cliente corresponde aos filtros atuais."/> : null}
+      </div>
+    </article>
+  );
+}
+
+function ClientProfileModal({ client, events = [], reservations = [], onClose, onSave, isSaving }) {
+  const initialContactDate = crmContactDate(client.nextContactAt);
+  const initialDate = initialContactDate ? localDateInput(initialContactDate) : "";
+  const [form, setForm] = useState({
+    companyName: client.company,
+    status: client.statusKey || "new",
+    owner: client.owner || "",
+    nextContactAt: initialDate,
+    tags: client.tags || "",
+    notes: client.notes || ""
+  });
+  const [error, setError] = useState("");
+  const recentEvents = sortEventsDesc(events).slice(0, 12);
+  const products = [...new Set([...client.topProducts, ...reservations.map((item) => item.product).filter(Boolean)])].slice(0, 8);
+
+  useEffect(() => {
+    function handleKeyDown(event) { if (event.key === "Escape") onClose(); }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSave({ ...form, companyKey: client.companyKey });
+    } catch (saveError) {
+      setError(saveError.message || "Não foi possível salvar.");
+    }
+  }
+
+  return (
+    <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
+      <section className="client-modal" role="dialog" aria-modal="true" aria-labelledby="client-modal-title" onMouseDown={(event) => event.stopPropagation()}>
+        <header className="client-modal-header">
+          <div><span className="eyebrow">Ficha comercial</span><h2 id="client-modal-title">{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div>
+          <button type="button" className="modal-close" onClick={onClose} aria-label="Fechar"><X size={18}/></button>
+        </header>
+        <div className="client-summary-grid">
+          <div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Produtos abertos</span><strong>{client.productOpen}</strong></div><div><span>Cotações</span><strong>{client.quotes}</strong></div><div><span>Valor cotado</span><strong>{client.quoteTotal}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div>
+        </div>
+        <div className="client-modal-body">
+          <form className="client-form" onSubmit={handleSubmit}>
+            <h3>Próximo passo</h3>
+            <label>Etapa
+              <select value={form.status} onChange={(event) => update("status", event.target.value)}><option value="new">Novo</option><option value="contact">Contato</option><option value="negotiation">Negociação</option><option value="active">Ativo</option><option value="cold">Frio</option><option value="lost">Perdido</option></select>
+            </label>
+            <label>Responsável <input value={form.owner} onChange={(event) => update("owner", event.target.value)} placeholder="Nome do responsável"/></label>
+            <label>Próximo contato <input type="date" value={form.nextContactAt} onChange={(event) => update("nextContactAt", event.target.value)}/></label>
+            <label>Tags <input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="ex.: funilaria, atacado, prioridade"/></label>
+            <label className="notes-label">Anotações <textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Contexto da negociação, necessidade e combinado com o cliente."/></label>
+            {error ? <p className="form-error">{error}</p> : null}
+            <button type="submit" className="crm-save" disabled={isSaving}>{isSaving ? <RefreshCw className="spin" size={16}/> : <UserCheck size={16}/>} {isSaving ? "Salvando..." : "Salvar ficha"}</button>
+          </form>
+          <div className="client-history">
+            <section><h3>Interesses principais</h3><div className="tag-list">{products.length ? products.map((product) => <span key={product}>{product}</span>) : <small>Nenhum produto identificado.</small>}</div></section>
+            <section><h3>Histórico recente</h3><div className="client-timeline">{recentEvents.length ? recentEvents.map((event) => <div key={`${event.id}-${event.timestamp}`}><i/><span><strong>{EVENT_LABELS[event.event] || event.event}</strong><small>{eventDetail(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>) : <EmptyState message="Sem eventos para este cliente no período."/>}</div></section>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 

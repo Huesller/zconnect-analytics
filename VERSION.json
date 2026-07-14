@@ -1,15 +1,15 @@
 {
   "project": "Z Connect",
-  "version": "9.0.1",
-  "release": "CORRECAO-CONTRASTE-HOVER-HISTORICO",
-  "build": "2026-07-13-1445",
+  "version": "10.0.0",
+  "release": "ANALYTICS-CRM-QUALIDADE-DADOS",
+  "build": "2026-07-14",
   "environment": "production",
   "notes": [
-    "Navegação em cinco áreas objetivas",
-    "Visão geral com quatro indicadores essenciais",
-    "Funil de ofertas especiais por cliente",
-    "Filtros globais compactos e detalhamento sob demanda",
-    "Contraste corrigido nos cards interativos e no histórico"
+    "Oportunidades comerciais priorizadas automaticamente",
+    "Carteira CRM com etapa, responsável, retorno, tags e anotações",
+    "Período personalizado e filtros avançados",
+    "Limpeza seletiva com prévia e backup no Google Sheets",
+    "Detecção e unificação assistida de nomes duplicados"
   ],
   "module": "Analytics"
 }
