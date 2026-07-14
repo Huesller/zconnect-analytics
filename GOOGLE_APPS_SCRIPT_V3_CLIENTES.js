@@ -1499,19 +1499,26 @@ function mergeCompanies_(data) {
       changedRows.push(row.slice());
       companyColumns.forEach(function(columnIndex) { row[columnIndex] = targetName; });
     });
-    if (!changedRows.length) return { ok: false, error: "nothing_to_merge" };
-
     const backupSheets = [];
-    const backupSheet = createCleanupBackup_(headers, changedRows, "UNIFICACAO_EVENTOS");
-    if (backupSheet) backupSheets.push(backupSheet);
-    replaceEventRows_(sheet, headers, values.slice(1));
+    if (changedRows.length) {
+      const backupSheet = createCleanupBackup_(headers, changedRows, "UNIFICACAO_EVENTOS");
+      if (backupSheet) backupSheets.push(backupSheet);
+      replaceEventRows_(sheet, headers, values.slice(1));
+    }
 
-    [getCrmClientsSheet_(), getCrmTasksSheet_(), getCrmActivitiesSheet_()].forEach(function(structuredSheet) {
+    [
+      { sheet: getCrmClientsSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "CRM_CLIENTS" },
+      { sheet: getCrmTasksSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "CRM_TASKS" },
+      { sheet: getCrmActivitiesSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "CRM_ACTIVITIES" },
+      { sheet: getReservationsSheet_(), nameHeader: "companyName", keyHeader: "", label: "RESERVATIONS" },
+      { sheet: getOffersSheet_(), nameHeader: "clientName", keyHeader: "", label: "OFFERS" }
+    ].forEach(function(config) {
+      const structuredSheet = config.sheet;
       const structuredValues = structuredSheet.getDataRange().getValues();
       if (structuredValues.length < 2) return;
       const structuredHeaders = structuredValues[0].map(String);
-      const nameIndex = structuredHeaders.indexOf("companyName");
-      const keyIndex = structuredHeaders.indexOf("companyKey");
+      const nameIndex = structuredHeaders.indexOf(config.nameHeader);
+      const keyIndex = config.keyHeader ? structuredHeaders.indexOf(config.keyHeader) : -1;
       if (nameIndex < 0) return;
       const structuredChanged = [];
       structuredValues.slice(1).forEach(function(row) {
@@ -1523,12 +1530,110 @@ function mergeCompanies_(data) {
         if (keyIndex >= 0) row[keyIndex] = normalizeCompanyKey_(targetName);
       });
       if (!structuredChanged.length) return;
-      const structuredBackup = createCleanupBackup_(structuredHeaders, structuredChanged, "UNIFICACAO_" + structuredSheet.getName());
+      const structuredBackup = createCleanupBackup_(structuredHeaders, structuredChanged, "UNIFICACAO_" + config.label);
       if (structuredBackup) backupSheets.push(structuredBackup);
-      replaceEventRows_(structuredSheet, structuredHeaders, structuredValues.slice(1));
+      let outputRows = structuredValues.slice(1);
+      if (config.label === "CRM_CLIENTS") {
+        const uniqueRows = [];
+        const rowByKey = {};
+        outputRows.forEach(function(row, index) {
+          const key = normalizeCompanyKey_(keyIndex >= 0 ? row[keyIndex] : row[nameIndex]) || ("__row_" + index);
+          if (rowByKey[key] === undefined) {
+            rowByKey[key] = uniqueRows.length;
+            uniqueRows.push(row);
+            return;
+          }
+          const targetRow = uniqueRows[rowByKey[key]];
+          row.forEach(function(value, columnIndex) {
+            if ((targetRow[columnIndex] === "" || targetRow[columnIndex] === null) && value !== "" && value !== null) targetRow[columnIndex] = value;
+          });
+        });
+        outputRows = uniqueRows;
+      }
+      replaceEventRows_(structuredSheet, structuredHeaders, outputRows);
       changedRows.push.apply(changedRows, structuredChanged);
     });
+    if (!changedRows.length) return { ok: false, error: "nothing_to_merge" };
     return { ok: true, mergedEvents: changedRows.length, backupSheet: backupSheets.join(", "), backupSheets: backupSheets };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function deleteCompanyData_(data) {
+  if (!validateAdminAccess_(data)) return { ok: false, error: "unauthorized" };
+  const selected = {};
+  (Array.isArray(data.companyKeys) ? data.companyKeys.slice(0, 100) : []).forEach(function(value) {
+    const key = normalizeCompanyKey_(value);
+    if (key) selected[key] = true;
+  });
+  if (!Object.keys(selected).length) return { ok: false, error: "no_companies_selected" };
+
+  const allowedScopes = {
+    events: true,
+    crm_clients: true,
+    crm_tasks: true,
+    crm_activities: true,
+    reservations: true,
+    offers: true
+  };
+  const scopes = (Array.isArray(data.scopes) ? data.scopes.slice(0, 10) : [])
+    .map(String)
+    .filter(function(scope) { return allowedScopes[scope]; });
+  if (!scopes.length) return { ok: false, error: "no_delete_scopes" };
+
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000);
+  } catch (err) {
+    return { ok: false, error: "delete_busy" };
+  }
+
+  try {
+    const configs = {
+      events: { sheet: getEventsSheet_(), nameHeader: "", keyHeader: "", label: "EXCLUSAO_EVENTOS" },
+      crm_clients: { sheet: getCrmClientsSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "EXCLUSAO_CRM_CLIENTS" },
+      crm_tasks: { sheet: getCrmTasksSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "EXCLUSAO_CRM_TASKS" },
+      crm_activities: { sheet: getCrmActivitiesSheet_(), nameHeader: "companyName", keyHeader: "companyKey", label: "EXCLUSAO_CRM_ACTIVITIES" },
+      reservations: { sheet: getReservationsSheet_(), nameHeader: "companyName", keyHeader: "", label: "EXCLUSAO_RESERVATIONS" },
+      offers: { sheet: getOffersSheet_(), nameHeader: "clientName", keyHeader: "", label: "EXCLUSAO_OFFERS" }
+    };
+    const removedByScope = {};
+    const backupSheets = [];
+    let totalRemoved = 0;
+
+    scopes.forEach(function(scope) {
+      const config = configs[scope];
+      const sheet = config.sheet;
+      const values = sheet.getDataRange().getValues();
+      if (!values.length) { removedByScope[scope] = 0; return; }
+      const headers = values[0].map(String);
+      const nameIndex = config.nameHeader ? headers.indexOf(config.nameHeader) : -1;
+      const keyIndex = config.keyHeader ? headers.indexOf(config.keyHeader) : -1;
+      const keep = [];
+      const removed = [];
+      values.slice(1).forEach(function(row) {
+        let key = "";
+        if (scope === "events") key = normalizeCompanyKey_(getCompanyFromEventRow_(row, headers));
+        else if (keyIndex >= 0) key = normalizeCompanyKey_(row[keyIndex] || (nameIndex >= 0 ? row[nameIndex] : ""));
+        else if (nameIndex >= 0) key = normalizeCompanyKey_(row[nameIndex]);
+        if (key && selected[key]) removed.push(row);
+        else keep.push(row);
+      });
+      removedByScope[scope] = removed.length;
+      if (!removed.length) return;
+      const backupSheet = createCleanupBackup_(headers, removed, config.label);
+      if (backupSheet) backupSheets.push(backupSheet);
+      replaceEventRows_(sheet, headers, keep);
+      totalRemoved += removed.length;
+    });
+
+    return {
+      ok: true,
+      totalRemoved: totalRemoved,
+      removedByScope: removedByScope,
+      backupSheets: backupSheets
+    };
   } finally {
     lock.releaseLock();
   }
@@ -1567,6 +1672,7 @@ function doPost(e) {
     update_crm_settings: true,
     cleanup_selected_companies: true,
     merge_companies: true,
+    delete_company_data: true,
     clear_events: true,
     reset: true,
     clear: true
@@ -1580,6 +1686,7 @@ function doPost(e) {
   if (action === "update_crm_settings") return jsonOutput(updateCrmSettings_(data));
   if (action === "cleanup_selected_companies") return jsonOutput(cleanupSelectedCompanies_(data));
   if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
+  if (action === "delete_company_data") return jsonOutput(deleteCompanyData_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
@@ -1620,5 +1727,5 @@ function doGet(e) {
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 11 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 11.2 + Reservas V1" });
 }

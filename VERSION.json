@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "11.0.0",
-  "release": "INTELLIGENCE-CRM-OPERACIONAL-SEGURO",
+  "version": "11.2.0",
+  "release": "FUNIL-CARRINHOS-GOVERNANCA-EMPRESAS",
   "build": "2026-07-14",
   "environment": "production",
   "notes": [
@@ -9,7 +9,10 @@
     "Central de ação, funil Kanban e Cliente 360 com tarefas",
     "Registro de ganhos, perdas, motivos e meta mensal",
     "Inteligência de demanda, estoque, reservas e saúde do catálogo",
-    "Limpeza seletiva com backup e restauração automática dos filtros"
+    "Limpeza seletiva com backup e restauração automática dos filtros",
+    "Funil compacto com navegação por etapa e sete colunas visíveis",
+    "Histórico permanente de interesse dos carrinhos e acompanhamento por WhatsApp",
+    "Mesclagem manual e exclusão por empresa, com escopo e backup por área"
   ],
   "module": "Analytics"
 }

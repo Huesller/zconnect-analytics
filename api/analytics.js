@@ -71,7 +71,7 @@ function scopePayload(action, data, profile) {
 }
 
 const ADMIN_ONLY_ACTIONS = new Set([
-  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "clear_events", "reset", "clear", "update_crm_settings"
+  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "delete_company_data", "clear_events", "reset", "clear", "update_crm_settings"
 ]);
 
 export default async function handler(req, res) {
