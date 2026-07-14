@@ -421,7 +421,9 @@ function normalizeEvent_(value) {
 
 function number_(value) {
   if (typeof value === "number") return value;
-  return Number(String(value || "0").replace(/\./g, "").replace(",", ".")) || 0;
+  const raw = String(value || "0").trim().replace(/[^0-9,.-]/g, "");
+  const normalized = raw.indexOf(",") >= 0 ? raw.replace(/\./g, "").replace(",", ".") : raw;
+  return Number(normalized) || 0;
 }
 
 function serializeProducts_(value) {
@@ -1468,7 +1470,7 @@ function mergeCompanies_(data) {
       targetName: String(item.targetName || "").trim().replace(/\s+/g, " ").slice(0, 120)
     };
   }).filter(function(item) {
-    return item.sourceName && item.targetName && item.sourceName.toLowerCase() !== item.targetName.toLowerCase() && !cleanupReason_(item.targetName);
+    return item.sourceName && item.targetName && item.sourceName !== item.targetName && !cleanupReason_(item.targetName);
   });
   if (!normalizedMerges.length) return { ok: false, error: "invalid_merges" };
 
@@ -1493,15 +1495,40 @@ function mergeCompanies_(data) {
     values.slice(1).forEach(function(row) {
       const companyName = getCompanyFromEventRow_(row, headers);
       const targetName = mergeBySource[String(companyName || "").trim().replace(/\s+/g, " ").toLowerCase()];
-      if (!targetName || targetName.toLowerCase() === String(companyName || "").trim().toLowerCase()) return;
+      if (!targetName || targetName === String(companyName || "").trim().replace(/\s+/g, " ")) return;
       changedRows.push(row.slice());
       companyColumns.forEach(function(columnIndex) { row[columnIndex] = targetName; });
     });
     if (!changedRows.length) return { ok: false, error: "nothing_to_merge" };
 
-    const backupSheet = createCleanupBackup_(headers, changedRows, "UNIFICACAO");
+    const backupSheets = [];
+    const backupSheet = createCleanupBackup_(headers, changedRows, "UNIFICACAO_EVENTOS");
+    if (backupSheet) backupSheets.push(backupSheet);
     replaceEventRows_(sheet, headers, values.slice(1));
-    return { ok: true, mergedEvents: changedRows.length, backupSheet: backupSheet };
+
+    [getCrmClientsSheet_(), getCrmTasksSheet_(), getCrmActivitiesSheet_()].forEach(function(structuredSheet) {
+      const structuredValues = structuredSheet.getDataRange().getValues();
+      if (structuredValues.length < 2) return;
+      const structuredHeaders = structuredValues[0].map(String);
+      const nameIndex = structuredHeaders.indexOf("companyName");
+      const keyIndex = structuredHeaders.indexOf("companyKey");
+      if (nameIndex < 0) return;
+      const structuredChanged = [];
+      structuredValues.slice(1).forEach(function(row) {
+        const currentName = String(row[nameIndex] || "").trim().replace(/\s+/g, " ");
+        const targetName = mergeBySource[currentName.toLowerCase()];
+        if (!targetName || targetName === currentName) return;
+        structuredChanged.push(row.slice());
+        row[nameIndex] = targetName;
+        if (keyIndex >= 0) row[keyIndex] = normalizeCompanyKey_(targetName);
+      });
+      if (!structuredChanged.length) return;
+      const structuredBackup = createCleanupBackup_(structuredHeaders, structuredChanged, "UNIFICACAO_" + structuredSheet.getName());
+      if (structuredBackup) backupSheets.push(structuredBackup);
+      replaceEventRows_(structuredSheet, structuredHeaders, structuredValues.slice(1));
+      changedRows.push.apply(changedRows, structuredChanged);
+    });
+    return { ok: true, mergedEvents: changedRows.length, backupSheet: backupSheets.join(", "), backupSheets: backupSheets };
   } finally {
     lock.releaseLock();
   }

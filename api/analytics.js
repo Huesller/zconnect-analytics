@@ -6,8 +6,78 @@ function parseBody(req) {
   try { return JSON.parse(req.body); } catch { return {}; }
 }
 
+function normalizeConsultant(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized === "ivoney" ? "ney" : normalized;
+}
+
+function profileFromSession(session) {
+  return session.profile || { username: session.user, displayName: session.user, role: "admin", consultants: ["*"] };
+}
+
+function isAdmin(profile) {
+  return profile.role === "admin" || (profile.consultants || []).includes("*");
+}
+
+function allowedConsultants(profile) {
+  return new Set((profile.consultants || []).map(normalizeConsultant).filter((item) => item && item !== "*"));
+}
+
+function rowConsultant(row) {
+  return normalizeConsultant(row?.consultant || row?.consultor || row?.owner || row?.specialOfferSeller);
+}
+
+function normalizeCompanyKey(value) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function readUpstream(apiUrl, adminToken, action, signal) {
+  const url = new URL(apiUrl);
+  url.searchParams.set("action", action);
+  url.searchParams.set("adminToken", adminToken);
+  url.searchParams.set("proxyCache", String(Date.now()));
+  const response = await fetch(url, { signal, cache: "no-store" });
+  return response.json().catch(() => ({}));
+}
+
+async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, signal) {
+  if (isAdmin(profile)) return true;
+  const allowed = allowedConsultants(profile);
+  if (action === "complete_crm_task") {
+    const data = await readUpstream(apiUrl, adminToken, "crm_tasks", signal);
+    const task = (data.tasks || []).find((item) => String(item.taskId || item.id) === String(body.taskId || ""));
+    return Boolean(task && allowed.has(rowConsultant(task)));
+  }
+  if (!["upsert_crm_client", "upsert_crm_task", "record_crm_activity"].includes(action)) return true;
+  const requestedCompany = normalizeCompanyKey(body.companyKey || body.companyName);
+  if (!requestedCompany) return false;
+  const data = await readUpstream(apiUrl, adminToken, "events", signal);
+  return (data.events || []).some((event) => (
+    allowed.has(rowConsultant(event))
+    && normalizeCompanyKey(event.companyName || event.empresa || event.company) === requestedCompany
+  ));
+}
+
+function scopePayload(action, data, profile) {
+  if (isAdmin(profile) || !data || typeof data !== "object") return data;
+  const allowed = allowedConsultants(profile);
+  const keep = (row) => allowed.has(rowConsultant(row));
+  if (action === "events" && Array.isArray(data.events)) return { ...data, events: data.events.filter(keep) };
+  if (action === "reservations_admin" && Array.isArray(data.reservations)) return { ...data, reservations: data.reservations.filter(keep) };
+  if (action === "crm_clients" && Array.isArray(data.clients)) return { ...data, clients: data.clients.filter(keep) };
+  if (action === "crm_tasks" && Array.isArray(data.tasks)) return { ...data, tasks: data.tasks.filter(keep) };
+  if (action === "crm_activities" && Array.isArray(data.activities)) return { ...data, activities: data.activities.filter(keep) };
+  return data;
+}
+
+const ADMIN_ONLY_ACTIONS = new Set([
+  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "clear_events", "reset", "clear", "update_crm_settings"
+]);
+
 export default async function handler(req, res) {
-  if (!requireSession(req, res)) return;
+  const session = requireSession(req, res);
+  if (!session) return;
+  const profile = profileFromSession(session);
   if (req.method !== "GET" && req.method !== "POST") return json(res, 405, { ok: false, error: "method_not_allowed" });
 
   const apiUrl = String(process.env.ANALYTICS_API_URL || process.env.VITE_ANALYTICS_API_URL || "").trim();
@@ -18,6 +88,7 @@ export default async function handler(req, res) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 25000);
     let response;
+    let action = "";
     if (req.method === "GET") {
       const url = new URL(apiUrl);
       Object.entries(req.query || {}).forEach(([key, value]) => {
@@ -26,9 +97,22 @@ export default async function handler(req, res) {
       });
       url.searchParams.set("adminToken", adminToken);
       url.searchParams.set("proxyCache", String(Date.now()));
+      action = url.searchParams.get("action") || "";
+      if (!isAdmin(profile) && ADMIN_ONLY_ACTIONS.has(action)) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "forbidden" }); }
       response = await fetch(url, { signal: controller.signal, cache: "no-store" });
     } else {
       const body = parseBody(req);
+      action = String(body.action || "");
+      if (!isAdmin(profile) && ADMIN_ONLY_ACTIONS.has(action)) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "forbidden" }); }
+      if (!isAdmin(profile)) {
+        const canWrite = await canWriteScopedRecord(apiUrl, adminToken, action, body, profile, controller.signal);
+        if (!canWrite) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "client_outside_user_scope" }); }
+        const primaryConsultant = [...allowedConsultants(profile)][0] || profile.username;
+        if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity"].includes(action)) {
+          body.owner = primaryConsultant;
+          body.consultant = primaryConsultant;
+        }
+      }
       body.adminToken = adminToken;
       if (body.action === "catalog_snapshot") body.syncToken = String(process.env.CATALOG_SYNC_TOKEN || adminToken);
       response = await fetch(apiUrl, {
@@ -40,9 +124,9 @@ export default async function handler(req, res) {
     }
     clearTimeout(timeout);
     const text = await response.text();
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "no-store, max-age=0");
-    return res.status(response.ok ? 200 : 502).send(text);
+    let data;
+    try { data = JSON.parse(text); } catch { return json(res, 502, { ok: false, error: "invalid_analytics_response" }); }
+    return json(res, response.ok ? 200 : 502, scopePayload(action, data, profile));
   } catch (error) {
     return json(res, 502, { ok: false, error: error?.name === "AbortError" ? "analytics_timeout" : "analytics_unavailable" });
   }

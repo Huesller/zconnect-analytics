@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
+  Bell,
   Building2,
   CalendarDays,
   Download,
@@ -308,7 +309,9 @@ function commercialEventScore(event) {
 
 function safeNumber(value) {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
-  return Number(String(value || "0").replace(/\./g, "").replace(",", ".")) || 0;
+  const raw = String(value || "0").trim().replace(/[^0-9,.-]/g, "");
+  const normalized = raw.includes(",") ? raw.replace(/\./g, "").replace(",", ".") : raw;
+  return Number(normalized) || 0;
 }
 
 function readField(row, keys, fallback = "") {
@@ -656,6 +659,31 @@ function money(value) {
   return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+function CurrencyInput({ value, onChange, placeholder = "R$ 0,00", ...props }) {
+  const [display, setDisplay] = useState(value === "" || value === null || value === undefined ? "" : money(safeNumber(value)));
+  useEffect(() => setDisplay(value === "" || value === null || value === undefined ? "" : money(safeNumber(value))), [value]);
+  return <input {...props} inputMode="decimal" value={display} placeholder={placeholder} onFocus={(event) => event.currentTarget.select()} onChange={(event) => {
+    setDisplay(event.target.value);
+    onChange?.(event.target.value);
+  }} onBlur={() => {
+    const numeric = safeNumber(display);
+    const formatted = display.trim() ? money(numeric) : "";
+    setDisplay(formatted);
+    onChange?.(formatted);
+  }}/>;
+}
+
+function DatePickerField({ value, onChange, min, max, required = false }) {
+  const inputRef = useRef(null);
+  function openPicker() {
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    if (typeof input.showPicker === "function") input.showPicker();
+  }
+  return <span className="date-picker-field"><input ref={inputRef} type="date" value={value} min={min} max={max} required={required} onChange={(event) => onChange(event.target.value)}/><button type="button" onClick={openPicker} aria-label="Abrir calendário"><CalendarDays size={16}/></button></span>;
+}
+
 function dateTime(value) {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "-";
@@ -778,6 +806,7 @@ function updateProductMetric(map, label, event, field, weight = 1) {
       views: 0,
       carts: 0,
       quotes: 0,
+      quotedItemsQty: 0,
       score: 0,
       lastEventDate: null
     });
@@ -1359,6 +1388,7 @@ function companyActivityRows(events) {
         productOpen: 0,
         added: 0,
         quotes: 0,
+        quotedItemsQty: 0,
         score: 0,
         quoteTotalNumber: 0,
         lastEventDate: null
@@ -1442,6 +1472,7 @@ function buildCrmRows(events, reservations, crmClients) {
       productOpen: 0,
       added: 0,
       quotes: 0,
+      quotedItemsQty: 0,
       quoteTotalNumber: 0,
       score: 0,
       days: new Set(),
@@ -1466,6 +1497,7 @@ function buildCrmRows(events, reservations, crmClients) {
         productOpen: 0,
         added: 0,
         quotes: 0,
+        quotedItemsQty: 0,
         quoteTotalNumber: 0,
         score: 0,
         days: new Set(),
@@ -1483,6 +1515,7 @@ function buildCrmRows(events, reservations, crmClients) {
     if (event.event === "add_to_cart") row.added += productQuantity(productFromEvent(event), event.quantity || 1);
     if (event.event === "whatsapp_quote") {
       row.quotes++;
+      row.quotedItemsQty += quoteItemsCount(event);
       row.quoteTotalNumber += safeNumber(event.cartTotal || event.total);
     }
     const date = new Date(event.timestamp);
@@ -1516,6 +1549,7 @@ function buildCrmRows(events, reservations, crmClients) {
       productOpen: 0,
       added: 0,
       quotes: 0,
+      quotedItemsQty: 0,
       quoteTotalNumber: 0,
       score: 0,
       days: new Set(),
@@ -1547,6 +1581,7 @@ function buildCrmRows(events, reservations, crmClients) {
       cartExcessQty: cart.excess,
       activeCartProducts: [...cart.products].slice(0, 8),
       topProducts,
+      itemCount: Math.max(cart.reserved, row.quotedItemsQty, topProducts.length),
       activeDays: row.days.size,
       quoteRate: percent(row.productOpen ? row.quotes / row.productOpen : 0),
       quoteTotal: money(row.quoteTotalNumber),
@@ -1666,6 +1701,7 @@ function buildActionCenterRows(opportunities, tasks, crmRows) {
       id: `action-task-${task.taskId}`,
       actionType: "task",
       taskId: task.taskId,
+      dueAt: task.dueAt,
       priority,
       level: overdue ? "urgent" : priority >= 110 ? "hot" : "high",
       reason: overdue ? `Retorno atrasado: ${task.title}` : dueToday ? `Retorno para hoje: ${task.title}` : task.title,
@@ -2069,7 +2105,7 @@ function LoginScreen({ onLogin }) {
         if (data.error === "auth_not_configured") throw new Error("Login seguro ainda não configurado na Vercel.");
         throw new Error("Usuário ou senha inválidos.");
       }
-      onLogin(data.user);
+      onLogin(data.profile || { username: data.user, displayName: data.user, role: "admin", consultants: ["*"] });
     } catch (loginError) {
       setError(loginError.message || "Não foi possível entrar.");
     } finally {
@@ -2124,7 +2160,7 @@ function LoginScreen({ onLogin }) {
 
 function App() {
   const [authStatus, setAuthStatus] = useState("checking");
-  const [authUser, setAuthUser] = useState("");
+  const [authProfile, setAuthProfile] = useState({ username: "", displayName: "", role: "", consultants: [] });
   const [events, setEvents] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [crmClients, setCrmClients] = useState([]);
@@ -2156,6 +2192,7 @@ function App() {
   const [isSavingCrm, setIsSavingCrm] = useState(false);
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
+  const [actionFilter, setActionFilter] = useState("all");
 
   useEffect(() => {
     let active = true;
@@ -2164,7 +2201,7 @@ function App() {
       .then(({ response, data }) => {
         if (!active) return;
         if (response.ok && data.authenticated) {
-          setAuthUser(data.user || "admin");
+          setAuthProfile(data.profile || { username: data.user || "admin", displayName: data.user || "Administrador", role: "admin", consultants: ["*"] });
           setAuthStatus("authenticated");
         } else {
           setAuthStatus("anonymous");
@@ -2574,6 +2611,17 @@ function App() {
     setSelectedClient(client);
   }
 
+  function openActionClient(client) {
+    const initialTab = client.actionType === "task"
+      ? "tasks"
+      : client.activeCartQty > 0 || client.priority === 90
+        ? "cart"
+        : client.priority === 70
+          ? "interests"
+          : "summary";
+    setSelectedClient({ ...client, initialTab });
+  }
+
   async function saveClientProfile(form) {
     setIsSavingCrm(true);
     try {
@@ -2843,7 +2891,7 @@ function App() {
   async function handleLogout() {
     await fetch("/api/logout", { method: "POST" }).catch(() => null);
     setAuthStatus("anonymous");
-    setAuthUser("");
+    setAuthProfile({ username: "", displayName: "", role: "", consultants: [] });
     setEvents([]);
     setStatus("Sessão encerrada.");
   }
@@ -2878,9 +2926,10 @@ function App() {
   }
 
   if (authStatus !== "authenticated") {
-    return <LoginScreen onLogin={(user) => { setAuthUser(user || "admin"); setAuthStatus("authenticated"); }} />;
+    return <LoginScreen onLogin={(profile) => { setAuthProfile(profile); setAuthStatus("authenticated"); }} />;
   }
 
+  const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");
   const navigation = [
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
     { id: "opportunities", label: "Ações agora", icon: <AlertTriangle size={17}/>, badge: actionRows.filter((item) => item.priority >= 80).length },
@@ -2890,7 +2939,7 @@ function App() {
     { id: "catalog", label: "Catálogo e estoque", icon: <Eye size={17}/>, badge: alerts.filter((item) => item.view === "catalog").length },
     { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
     { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
-    { id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length },
+    ...(isAdminUser ? [{ id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length }] : []),
     { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
   ];
   const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
@@ -2906,8 +2955,16 @@ function App() {
     quality: "Limpeza seletiva, prévia e padronização dos dados sem apagar empresas reais.",
     events: "Histórico detalhado dos eventos do catálogo."
   };
-  const dueFollowUps = normalizedTasks.filter((item) => item.status === "open" && crmContactDate(item.dueAt) && crmContactDate(item.dueAt).getTime() <= endOfDay(new Date()).getTime()).length;
+  const dueTaskRows = normalizedTasks.filter((item) => item.status === "open" && crmContactDate(item.dueAt) && crmContactDate(item.dueAt).getTime() <= endOfDay(new Date()).getTime());
+  const dueFollowUps = dueTaskRows.length;
   const negotiationClients = crmRows.filter((item) => item.statusKey === "negotiation").length;
+  const filteredActionRows = actionRows.filter((item) => {
+    if (actionFilter === "immediate") return item.priority >= 100;
+    if (actionFilter === "cart") return item.actionType === "opportunity" && (item.priority === 90 || item.activeCartQty > 0);
+    if (actionFilter === "demand") return item.priority === 70;
+    if (actionFilter === "due") return item.actionType === "task" && crmContactDate(item.dueAt)?.getTime() <= endOfDay(new Date()).getTime();
+    return true;
+  });
 
   return (
     <main className="app analytics-app">
@@ -2920,11 +2977,17 @@ function App() {
           </div>
         </div>
         <div className="analytics-top-actions">
-          <span className="secure-user"><UserCheck size={14}/> {authUser}</span>
+          <span className="secure-user"><UserCheck size={14}/> {authProfile.displayName || authProfile.username}<small>{authProfile.role === "representative" ? "Representante" : isAdminUser ? "Administrador" : "Consultor"}</small></span>
+          <button type="button" className={`notification-button ${dueFollowUps ? "has-alerts" : ""}`} onClick={() => {
+            const task = dueTaskRows[0];
+            if (!task) return;
+            const client = crmRows.find((row) => row.companyKey === task.companyKey);
+            if (client) setSelectedClient({ ...client, initialTab: "tasks" });
+          }} title={dueFollowUps ? `${dueFollowUps} retorno(s) para hoje ou vencido(s)` : "Nenhum retorno pendente"}><Bell size={17}/>{dueFollowUps ? <b>{dueFollowUps}</b> : null}</button>
           <button type="button" className="refresh" onClick={() => load()} disabled={isLoading || isResetting}>
             <RefreshCw className={isLoading ? "spin" : undefined} size={16}/>{isLoading ? "Atualizando" : "Atualizar"}
           </button>
-          <button type="button" className="refresh" onClick={exportExecutiveReport}><Download size={16}/> Relatório</button>
+          {isAdminUser ? <button type="button" className="refresh" onClick={exportExecutiveReport}><Download size={16}/> Relatório</button> : null}
           <button type="button" className="analytics-logout" onClick={handleLogout}>Sair</button>
         </div>
       </header>
@@ -2955,11 +3018,11 @@ function App() {
               <label>Até <input type="date" value={dateTo} min={dateFrom || undefined} onChange={(event) => setDateTo(event.target.value)}/></label>
             </div>
           ) : null}
-          <label><UserCheck size={14}/> Consultor
+          {isAdminUser ? <label><UserCheck size={14}/> Consultor
             <select value={consultant} onChange={(event) => setConsultant(event.target.value)}>
               {consultants.map((item) => <option key={item} value={item}>{item === "all" ? "Todos" : item.toUpperCase()}</option>)}
             </select>
-          </label>
+          </label> : null}
           <label><Building2 size={14}/> Empresa
             <select value={company} onChange={(event) => setCompany(event.target.value)}>
               {companies.map((item) => <option key={item} value={item}>{item === "all" ? "Todas" : item}</option>)}
@@ -2995,6 +3058,12 @@ function App() {
         <p>{viewDescriptions[activeView]}</p>
       </section>
 
+      {dueFollowUps ? <button type="button" className="due-task-banner" onClick={() => {
+        const task = dueTaskRows[0];
+        const client = crmRows.find((row) => row.companyKey === task?.companyKey);
+        if (client) setSelectedClient({ ...client, initialTab: "tasks" });
+      }}><Bell size={18}/><span><strong>{dueFollowUps} retorno(s) para hoje ou vencido(s)</strong><small>Clique para abrir a próxima tarefa.</small></span><b>Abrir tarefa →</b></button> : null}
+
       {!["carts", "quality"].includes(activeView) && !filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
 
       {activeView === "overview" ? (
@@ -3013,7 +3082,7 @@ function App() {
           ]}/>
           <section className="command-grid">
             <AlertCenter alerts={alerts} onNavigate={setActiveView}/>
-            <GoalPanel target={monthlyTarget} result={wonValue} won={wonActivities.length} lost={lostActivities.length} onSave={saveMonthlyTarget}/>
+            <GoalPanel target={monthlyTarget} result={wonValue} won={wonActivities.length} lost={lostActivities.length} onSave={isAdminUser ? saveMonthlyTarget : null}/>
           </section>
           <OpportunityList rows={actionRows.slice(0, 8)} onOpen={openClientProfile}/>
           <section className="overview-grid">
@@ -3039,12 +3108,12 @@ function App() {
       {activeView === "opportunities" ? (
         <div className="view-stack">
           <StatGrid items={[
-            { icon: <Flame/>, label: "Ação imediata", value: actionRows.filter((item) => item.priority >= 100).length, emphasis: true },
-            { icon: <ShoppingCart/>, label: "Carrinho sem cotação", value: actionRows.filter((item) => item.actionType === "opportunity" && (item.priority === 90 || item.activeCartQty > 0)).length },
-            { icon: <Search/>, label: "Demanda não atendida", value: actionRows.filter((item) => item.priority === 70).length },
-            { icon: <CalendarDays/>, label: "Retornos vencidos", value: dueFollowUps, emphasis: true }
+            { icon: <Flame/>, label: "Ação imediata", value: actionRows.filter((item) => item.priority >= 100).length, emphasis: true, onOpen: () => setActionFilter("immediate") },
+            { icon: <ShoppingCart/>, label: "Carrinho sem cotação", value: actionRows.filter((item) => item.actionType === "opportunity" && (item.priority === 90 || item.activeCartQty > 0)).length, onOpen: () => setActionFilter("cart") },
+            { icon: <Search/>, label: "Demanda não atendida", value: actionRows.filter((item) => item.priority === 70).length, onOpen: () => setActionFilter("demand") },
+            { icon: <CalendarDays/>, label: "Retornos vencidos", value: dueFollowUps, emphasis: true, onOpen: () => setActionFilter("due") }
           ]}/>
-          <OpportunityList rows={actionRows} onOpen={openClientProfile}/>
+          <OpportunityList rows={filteredActionRows} onOpen={openActionClient} activeFilter={actionFilter} onClear={() => setActionFilter("all")}/>
         </div>
       ) : null}
 
@@ -3080,17 +3149,7 @@ function App() {
             { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
             { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
           ]}/>
-          <section className="commercial-grid">
-            <MetricTable title="Produtos mais quentes" subtitle="Maior intenção comercial" rows={hotProducts} columns={HOT_PRODUCT_COLUMNS.slice(1, 6)} empty={EMPTY_LIST_MESSAGE} icon={<Flame size={18}/>} onOpen={openHotProductsModal}/>
-            <MetricTable title="Produtos mais cotados" subtitle="Itens pedidos pelo WhatsApp" rows={quotedProducts} columns={QUOTED_PRODUCT_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<Send size={18}/>} onOpen={openQuotedProductsModal}/>
-            <MetricTable title="Oportunidades de cadastro" subtitle="O que foi buscado e não encontrado" rows={noResultDemand.slice(0, 20)} columns={NO_RESULT_DEMAND_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<AlertTriangle size={18}/>} onOpen={openNoResultDemandModal}/>
-          </section>
-          <DemandStockTable rows={demandStockRows.slice(0, 30)}/>
-          <section className="columns three-columns">
-            <Rank title="Top buscas" rows={searchRank} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
-            <Rank title="Mais abertos" rows={productOpenRank} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
-            <Rank title="Mais adicionados" rows={productAddedRank} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
-          </section>
+          <ProductIntelligenceView hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal}/>
         </div>
       ) : null}
 
@@ -3327,10 +3386,10 @@ function GoalPanel({ target = 0, result = 0, won = 0, lost = 0, onSave }) {
       <strong className="goal-result">{money(result)}</strong>
       <div className="goal-track"><i style={{ width: `${progress}%` }}/></div>
       <div className="goal-meta"><span><b>{won}</b> ganhos</span><span><b>{lost}</b> perdas</span><span>Meta: <b>{target ? money(target) : "não definida"}</b></span></div>
-      <form className="goal-form" onSubmit={(event) => { event.preventDefault(); onSave(value); }}>
-        <label>Meta mensal <input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ex.: 100000"/></label>
+      {onSave ? <form className="goal-form" onSubmit={(event) => { event.preventDefault(); onSave(value); }}>
+        <label>Meta mensal <CurrencyInput value={value} onChange={setValue} placeholder="R$ 100.000,00"/></label>
         <button type="submit">Salvar meta</button>
-      </form>
+      </form> : <p className="goal-readonly">Meta definida pela administração.</p>}
     </article>
   );
 }
@@ -3358,7 +3417,7 @@ function PipelineBoard({ rows = [], onOpen, onMove }) {
             <div className="pipeline-cards">
               {stageRows.map((client) => (
                 <button type="button" draggable key={client.companyKey} className="pipeline-card" onDragStart={(event) => event.dataTransfer.setData("text/plain", client.companyKey)} onClick={() => onOpen(client)} disabled={moving === client.companyKey}>
-                  <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.activeCartQty ? `${client.activeCartQty} un. no carrinho` : client.topProducts[0] || "Sem produto recente"}</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
+                  <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.itemCount || 0} item(ns)</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
                 </button>
               ))}
               {!stageRows.length ? <p className="pipeline-empty">Solte um cliente aqui</p> : null}
@@ -3368,6 +3427,39 @@ function PipelineBoard({ rows = [], onOpen, onMove }) {
       })}
     </section>
   );
+}
+
+function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = [], onOpenHot, onOpenQuoted, onOpenMissing }) {
+  const [tab, setTab] = useState("hot");
+  const tabs = [
+    ["hot", "Mais procurados", hot.length],
+    ["quoted", "Mais cotados", quoted.length],
+    ["stock", "Demanda x estoque", stock.length],
+    ["missing", "Não encontrados", missing.length]
+  ];
+  const rows = tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
+  function splitLabel(label) {
+    const text = String(label || "");
+    const index = text.indexOf(" - ");
+    return index < 0 ? { code: "-", name: text || "-" } : { code: text.slice(0, index), name: text.slice(index + 3) };
+  }
+  return <article className="panel product-intelligence">
+    <div className="panel-head"><div><h2><Flame size={18}/> Inteligência de produtos</h2><p>Uma leitura por vez, com código e descrição sempre visíveis.</p></div><button type="button" className="refresh" onClick={tab === "hot" ? onOpenHot : tab === "quoted" ? onOpenQuoted : tab === "missing" ? onOpenMissing : undefined} disabled={tab === "stock"}>Abrir relatório completo</button></div>
+    <nav className="product-tabs">{tabs.map(([key, label, count]) => <button type="button" key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><span>{label}</span><b>{count}</b></button>)}</nav>
+    <div className="product-readable-table">
+      <div className="product-readable-head"><span>Produto / termo</span><span>{tab === "missing" ? "Ocorrências" : "Aberturas"}</span><span>{tab === "stock" ? "Estoque" : "Carrinhos"}</span><span>{tab === "stock" ? "Disponível" : "Cotações"}</span><span>Sinal</span></div>
+      {rows.slice(0, 50).map((row, index) => {
+        const label = tab === "missing" ? row.search : tab === "stock" ? `${row.productCode} - ${row.productName}` : row.product;
+        const product = splitLabel(label);
+        const first = tab === "missing" ? row.count : tab === "stock" ? row.demandScore : row.views;
+        const second = tab === "missing" ? row.companies : tab === "stock" ? row.stockQty : row.carts;
+        const third = tab === "missing" ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
+        const signal = tab === "missing" ? `${row.companies || 0} empresa(s)` : tab === "stock" ? row.signal : `${row.score || 0} pts`;
+        return <div className="product-readable-row" key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
+      })}
+      {!rows.length ? <EmptyState message="Sem dados para esta leitura no período."/> : null}
+    </div>
+  </article>;
 }
 
 function DemandStockTable({ rows = [] }) {
@@ -3382,7 +3474,7 @@ function DemandStockTable({ rows = [] }) {
   );
 }
 
-function CatalogHealthView({ health = {}, demandRows = [] }) {
+function CatalogHealthView({ health = {}, demandRows = [], onNavigate }) {
   const latest = health.latest;
   const snapshots = health.snapshots || [];
   const age = latest ? Date.now() - new Date(latest.createdAt).getTime() : Infinity;
@@ -3397,8 +3489,8 @@ function CatalogHealthView({ health = {}, demandRows = [] }) {
       ]}/>
       <section className="catalog-grid">
         <article className="panel catalog-summary">
-          <div className="panel-head"><div><h2><RefreshCw size={18}/> Atualização diária</h2><p>Diagnóstico do processo que alimenta o catálogo.</p></div><span className={`health-badge health-${freshness.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{freshness}</span></div>
-          {latest ? <div className="catalog-facts"><div><span>Última execução</span><strong>{dateTime(latest.createdAt)}</strong></div><div><span>Duração</span><strong>{safeNumber(latest.durationMs)} ms</strong></div><div><span>Novos</span><strong>{safeNumber(latest.newCount)}</strong></div><div><span>Removidos</span><strong>{safeNumber(latest.removedCount)}</strong></div><div><span>Estoques alterados</span><strong>{safeNumber(latest.changedStockCount)}</strong></div><div><span>Sem estoque</span><strong>{safeNumber(latest.outOfStockCount)}</strong></div></div> : <EmptyState message="O painel está pronto. Falta enviar o primeiro snapshot pelo processo diário do catálogo."/>}
+          <div className="panel-head"><div><h2><RefreshCw size={18}/> Atualização diária</h2><p>O catálogo envia o estoque automaticamente após cada publicação na Vercel.</p></div><span className={`health-badge health-${freshness.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{freshness}</span></div>
+          {latest ? <><div className="catalog-facts"><div><span>Última execução</span><strong>{dateTime(latest.createdAt)}</strong></div><div><span>Duração</span><strong>{safeNumber(latest.durationMs)} ms</strong></div><div><span>Novos</span><strong>{safeNumber(latest.newCount)}</strong></div><div><span>Removidos</span><strong>{safeNumber(latest.removedCount)}</strong></div><div><span>Estoques alterados</span><strong>{safeNumber(latest.changedStockCount)}</strong></div><div><span>Sem estoque</span><strong>{safeNumber(latest.outOfStockCount)}</strong></div></div><button type="button" className="refresh catalog-action" onClick={() => onNavigate?.("products")}>Analisar produtos e demanda →</button></> : <div className="catalog-integration-empty"><AlertTriangle size={20}/><div><strong>Integração pronta, aguardando a próxima publicação</strong><p>Configure o mesmo <code>CATALOG_SYNC_TOKEN</code> nos dois projetos e faça um novo deploy do Catálogo. O primeiro snapshot será enviado sozinho.</p></div></div>}
         </article>
         <article className="panel snapshot-history">
           <div className="panel-head"><div><h2><CalendarDays size={18}/> Histórico</h2><p>Últimas execuções recebidas.</p></div><span>{snapshots.length}</span></div>
@@ -3410,7 +3502,7 @@ function CatalogHealthView({ health = {}, demandRows = [] }) {
   );
 }
 
-function OpportunityList({ rows = [], onOpen }) {
+function OpportunityList({ rows = [], onOpen, activeFilter = "all", onClear }) {
   const [level, setLevel] = useState("all");
   const [query, setQuery] = useState("");
   const visibleRows = rows.filter((row) => {
@@ -3426,6 +3518,7 @@ function OpportunityList({ rows = [], onOpen }) {
         <div><h2><AlertTriangle size={18}/> Fila comercial inteligente</h2><p>Ordenada pela chance e urgência. Abra um cliente para registrar o próximo passo.</p></div>
         <span>{visibleRows.length} oportunidade(s)</span>
       </div>
+      {activeFilter !== "all" ? <div className="active-list-filter"><span>Filtro do card aplicado</span><button type="button" onClick={onClear}>Ver todas as ações</button></div> : null}
       <div className="table-tools">
         <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, peça ou motivo"/></label>
         <label><Filter size={14}/> Prioridade
@@ -3490,7 +3583,7 @@ function ClientCrmTable({ rows = [], onOpen }) {
   );
 }
 
-function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
+function LegacyClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
   const initialContactDate = crmContactDate(client.nextContactAt);
   const initialDate = initialContactDate ? localDateInput(initialContactDate) : "";
   const [form, setForm] = useState({
@@ -3586,6 +3679,109 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
       </section>
     </div>
   );
+}
+
+function buildClientInterestRows(events = [], reservations = []) {
+  const map = new Map();
+  function get(product) {
+    const code = productCode(product);
+    const name = productName(product);
+    const key = `${code}|${name}`;
+    if (!code && !name) return null;
+    if (!map.has(key)) map.set(key, { id: key, code: code || "-", name: name || "Produto sem descrição", quantity: 0, value: 0, opens: 0, carts: 0, quotes: 0, reserved: 0 });
+    return map.get(key);
+  }
+  events.forEach((event) => {
+    const products = event.event === "whatsapp_quote" ? quoteProducts(event) : [productFromEvent(event)];
+    products.forEach((product) => {
+      const row = get(product);
+      if (!row) return;
+      if (event.event === "product_open") row.opens += 1;
+      if (event.event === "add_to_cart") { const qty = productQuantity(product, event.quantity || 1); row.carts += qty; row.quantity += qty; }
+      if (event.event === "whatsapp_quote") { const qty = productQuantity(product, 1); row.quotes += qty; row.quantity += qty; row.value += productValue(product, event); }
+    });
+  });
+  reservations.forEach((reservation) => {
+    const row = get({ productCode: reservation.productCode, productName: reservation.product });
+    if (!row) return;
+    row.reserved += safeNumber(reservation.reservedNumber ?? reservation.reservedQty);
+    row.quantity = Math.max(row.quantity, safeNumber(reservation.requestedNumber ?? reservation.requestedQty));
+  });
+  return [...map.values()].sort((a, b) => b.quotes - a.quotes || b.carts - a.carts || b.opens - a.opens || a.code.localeCompare(b.code, "pt-BR"));
+}
+
+function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
+  const initialContactDate = crmContactDate(client.nextContactAt);
+  const [tab, setTab] = useState(client.initialTab || "summary");
+  const [form, setForm] = useState({
+    companyName: client.company, phone: client.phone || "", status: client.statusKey || "new", owner: client.owner || "",
+    nextContactAt: initialContactDate ? localDateInput(initialContactDate) : "", tags: client.tags || "", notes: client.notes || "",
+    expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || ""
+  });
+  const [taskForm, setTaskForm] = useState({ title: "Retornar contato", dueAt: localDateInput(new Date()), priority: "normal" });
+  const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
+  const [busyAction, setBusyAction] = useState("");
+  const [error, setError] = useState("");
+  const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
+  const quoteEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "whatsapp_quote")), [events]);
+  const timelineEvents = useMemo(() => sortEventsDesc(events).slice(0, 25), [events]);
+  const openTasks = tasks.filter((task) => task.status === "open");
+  const whatsappDigits = String(form.phone || "").replace(/\D/g, "");
+
+  useEffect(() => {
+    function keydown(event) { if (event.key === "Escape") onClose(); }
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [onClose]);
+
+  function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
+  async function handleSubmit(event) {
+    event.preventDefault(); setError("");
+    try { await onSave({ ...form, companyKey: client.companyKey }); } catch (saveError) { setError(saveError.message || "Não foi possível salvar."); }
+  }
+  async function handleTask(event) {
+    event.preventDefault(); setBusyAction("task");
+    try { await onSaveTask({ ...taskForm, companyKey: client.companyKey, companyName: client.company, owner: form.owner || client.owner }); setTaskForm((current) => ({ ...current, title: "Retornar contato" })); }
+    finally { setBusyAction(""); }
+  }
+  async function handleOutcome(event) {
+    event.preventDefault(); setBusyAction("outcome");
+    try { await onOutcome({ ...client, ...form }, outcome); } finally { setBusyAction(""); }
+  }
+
+  const tabs = [
+    ["summary", "Resumo"], ["interests", `Interesses (${interestRows.length})`], ["cart", `Carrinho e cotações (${reservations.length + quoteEvents.length})`],
+    ["tasks", `Tarefas (${openTasks.length})`], ["history", "Histórico"]
+  ];
+
+  return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
+    <section className="client-modal client-modal-v2" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+      <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></header>
+      <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{client.itemCount || interestRows.length}</strong></div><div><span>Cotações</span><strong>{client.quotes}</strong></div><div><span>Valor cotado</span><strong>{client.quoteTotal}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
+      <nav className="client-tabs">{tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
+      <div className="client-tab-content">
+        {tab === "summary" ? <form className="client-form client-form-v2" onSubmit={handleSubmit}>
+          <div className="client-form-grid">
+            <label>Etapa<select value={form.status} onChange={(event) => update("status", event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>
+            <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
+            <label>Responsável<input value={form.owner} onChange={(event) => update("owner", event.target.value)} placeholder="Nome do responsável"/></label>
+            <label>Próximo contato<DatePickerField value={form.nextContactAt} onChange={(value) => update("nextContactAt", value)}/></label>
+            <label>Valor esperado<CurrencyInput value={form.expectedValue} onChange={(value) => update("expectedValue", value)} placeholder="R$ 2.500,00"/></label>
+            <label>Tags<input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="funilaria, atacado, prioridade"/></label>
+            <label className="notes-label">Anotações<textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Contexto da negociação, necessidade e combinado com o cliente."/></label>
+          </div>{error ? <p className="form-error">{error}</p> : null}<div className="client-form-actions"><button type="submit" className="crm-save" disabled={isSaving}><UserCheck size={16}/> {isSaving ? "Salvando..." : "Salvar ficha"}</button>{whatsappDigits ? <a className="whatsapp-link" href={`https://wa.me/${whatsappDigits}`} target="_blank" rel="noreferrer"><Send size={16}/> Abrir WhatsApp</a> : null}</div>
+        </form> : null}
+
+        {tab === "interests" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Interesses principais</h3><p>Produtos organizados por código, descrição, quantidade e valor cotado.</p></div></div><div className="interest-table"><div className="interest-table-head"><span>Código</span><span>Descrição</span><span>Qtd.</span><span>Sinais</span><span>Valor cotado</span></div>{interestRows.map((row) => <div className="interest-table-row" key={row.id}><b>{row.code}</b><span>{row.name}</span><strong>{row.quantity || row.reserved || 1}</strong><small>{row.opens} abertura(s) · {row.carts} carrinho · {row.quotes} cotado(s){row.reserved ? ` · ${row.reserved} reservado(s)` : ""}</small><b>{money(row.value)}</b></div>)}{!interestRows.length ? <EmptyState message="Nenhum produto identificado para este cliente."/> : null}</div></section> : null}
+
+        {tab === "cart" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Carrinho e cotações</h3><p>O que está reservado agora e o histórico de cotações enviadas.</p></div></div><div className="cart-detail-grid"><article><h4>Reserva ativa</h4>{reservations.map((item, index) => <div className="cart-detail-row" key={`${item.productCode}-${index}`}><span><b>{item.productCode || "-"}</b><small>{item.product || "Produto sem descrição"}</small></span><strong>{safeNumber(item.reservedNumber)} reservada(s)</strong>{safeNumber(item.excessNumber) ? <em>{safeNumber(item.excessNumber)} sob consulta</em> : null}</div>)}{!reservations.length ? <EmptyState message="Nenhum item reservado agora."/> : null}</article><article><h4>Cotações enviadas</h4>{quoteEvents.map((event) => <div className="quote-detail-row" key={`${event.id}-${event.timestamp}`}><span><b>{quoteItemsCount(event)} item(ns) · {money(event.cartTotal || event.total)}</b><small>{quoteProductsSummary(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>)}{!quoteEvents.length ? <EmptyState message="Nenhuma cotação enviada."/> : null}</article></div></section> : null}
+
+        {tab === "tasks" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Tarefas e retornos</h3><p>Defina o próximo passo e seja avisado quando o prazo chegar.</p></div></div><form className="task-form task-form-v2" onSubmit={handleTask}><label>Ação<input value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} required/></label><label>Data<DatePickerField value={taskForm.dueAt} onChange={(value) => setTaskForm((current) => ({ ...current, dueAt: value }))} required/></label><label>Prioridade<select value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value }))}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label><button disabled={busyAction === "task"}>Adicionar tarefa</button></form><div className="task-list task-list-v2">{openTasks.map((task) => <div key={task.taskId}><span><strong>{task.title}</strong><small>{task.dueAt ? dateOnly(task.dueAt) : "Sem prazo"} · {task.owner || "Sem responsável"}</small></span><button type="button" onClick={() => onCompleteTask(task.taskId)}>Concluir</button></div>)}{!openTasks.length ? <EmptyState message="Nenhuma tarefa aberta."/> : null}</div><section className="outcome-card"><h3>Registrar resultado</h3><form onSubmit={handleOutcome}><select value={outcome.type} onChange={(event) => setOutcome((current) => ({ ...current, type: event.target.value }))}><option value="won">Pedido fechado</option><option value="lost">Oportunidade perdida</option></select><CurrencyInput value={outcome.value} onChange={(value) => setOutcome((current) => ({ ...current, value }))} placeholder="R$ 0,00"/>{outcome.type === "lost" ? <select value={outcome.reason} onChange={(event) => setOutcome((current) => ({ ...current, reason: event.target.value }))} required><option value="">Motivo da perda</option>{LOST_REASONS.map((reason) => <option key={reason}>{reason}</option>)}</select> : null}<input value={outcome.note} onChange={(event) => setOutcome((current) => ({ ...current, note: event.target.value }))} placeholder="Observação"/><button disabled={busyAction === "outcome"}>{busyAction === "outcome" ? "Registrando..." : "Registrar"}</button></form></section></section> : null}
+
+        {tab === "history" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Linha do tempo</h3><p>Tarefas, mudanças de etapa, buscas, produtos e cotações.</p></div></div><div className="client-timeline">{activities.slice(0, 15).map((activity) => <div key={activity.activityId}><i className={`activity-${activity.type}`}/><span><strong>{activity.type === "won" ? "Pedido fechado" : activity.type === "lost" ? "Perda registrada" : activity.type === "stage_change" ? "Etapa alterada" : "Atividade CRM"}</strong><small>{activity.note || activity.reason || `${crmStatusLabel(activity.stageFrom)} → ${crmStatusLabel(activity.stageTo)}`}</small></span><time>{activity.createdAtLabel}</time></div>)}{timelineEvents.map((event) => <div key={`${event.id}-${event.timestamp}`}><i/><span><strong>{EVENT_LABELS[event.event] || event.event}</strong><small>{eventDetail(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>)}{!activities.length && !timelineEvents.length ? <EmptyState message="Sem eventos para este cliente."/> : null}</div></section> : null}
+      </div>
+    </section>
+  </div>;
 }
 
 function MetricTable({ title, subtitle, rows = [], columns = [], empty = EMPTY_LIST_MESSAGE, icon, onOpen }) {

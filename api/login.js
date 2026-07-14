@@ -1,4 +1,4 @@
-import { createSession, json, sessionCookie, verifyCredentials } from "../lib/server-auth.js";
+import { authenticateCredentials, createSession, json, sessionCookie } from "../lib/server-auth.js";
 
 export default function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { ok: false, error: "method_not_allowed" });
@@ -9,7 +9,8 @@ export default function handler(req, res) {
     return json(res, 400, { ok: false, error: "invalid_json" });
   }
   if (!process.env.ANALYTICS_SESSION_SECRET) return json(res, 503, { ok: false, error: "auth_not_configured" });
-  if (!verifyCredentials(body.user, body.password)) return json(res, 401, { ok: false, error: "invalid_credentials" });
-  res.setHeader("Set-Cookie", sessionCookie(createSession(String(body.user).trim())));
-  return json(res, 200, { ok: true, user: String(body.user).trim() });
+  const profile = authenticateCredentials(body.user, body.password);
+  if (!profile) return json(res, 401, { ok: false, error: "invalid_credentials" });
+  res.setHeader("Set-Cookie", sessionCookie(createSession(profile)));
+  return json(res, 200, { ok: true, user: profile.username, profile });
 }
