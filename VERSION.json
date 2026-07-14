@@ -1,15 +1,15 @@
 {
   "project": "Z Connect",
-  "version": "10.0.0",
-  "release": "ANALYTICS-CRM-QUALIDADE-DADOS",
+  "version": "11.0.0",
+  "release": "INTELLIGENCE-CRM-OPERACIONAL-SEGURO",
   "build": "2026-07-14",
   "environment": "production",
   "notes": [
-    "Oportunidades comerciais priorizadas automaticamente",
-    "Carteira CRM com etapa, responsável, retorno, tags e anotações",
-    "Período personalizado e filtros avançados",
-    "Limpeza seletiva com prévia e backup no Google Sheets",
-    "Detecção e unificação assistida de nomes duplicados"
+    "Login real no servidor com cookie HttpOnly e APIs protegidas",
+    "Central de ação, funil Kanban e Cliente 360 com tarefas",
+    "Registro de ganhos, perdas, motivos e meta mensal",
+    "Inteligência de demanda, estoque, reservas e saúde do catálogo",
+    "Limpeza seletiva com backup e restauração automática dos filtros"
   ],
   "module": "Analytics"
 }

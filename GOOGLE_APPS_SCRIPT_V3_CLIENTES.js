@@ -2,6 +2,11 @@ const EVENTS_SHEET = "EVENTS";
 const OFFERS_SHEET = "OFFERS";
 const RESERVATIONS_SHEET = "RESERVATIONS";
 const CRM_CLIENTS_SHEET = "CRM_CLIENTS";
+const CRM_TASKS_SHEET = "CRM_TASKS";
+const CRM_ACTIVITIES_SHEET = "CRM_ACTIVITIES";
+const CRM_SETTINGS_SHEET = "CRM_SETTINGS";
+const CATALOG_SNAPSHOTS_SHEET = "CATALOG_SNAPSHOTS";
+const CATALOG_PRODUCTS_SHEET = "CATALOG_PRODUCTS";
 const ACTIVE_RESERVATION_TTL_MS = 20 * 60 * 1000;
 const QUOTED_RESERVATION_TTL_MS = 60 * 60 * 1000;
 const RESERVATION_HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
@@ -79,12 +84,70 @@ const RESERVATION_HEADERS = [
 const CRM_CLIENT_HEADERS = [
   "companyKey",
   "companyName",
+  "phone",
   "status",
   "owner",
   "nextContactAt",
   "tags",
   "notes",
+  "expectedValue",
+  "lastOutcome",
+  "lostReason",
   "createdAt",
+  "updatedAt"
+];
+
+const CRM_TASK_HEADERS = [
+  "taskId",
+  "companyKey",
+  "companyName",
+  "title",
+  "dueAt",
+  "owner",
+  "priority",
+  "status",
+  "createdAt",
+  "completedAt"
+];
+
+const CRM_ACTIVITY_HEADERS = [
+  "activityId",
+  "companyKey",
+  "companyName",
+  "type",
+  "stageFrom",
+  "stageTo",
+  "value",
+  "reason",
+  "note",
+  "owner",
+  "createdAt"
+];
+
+const CRM_SETTING_HEADERS = ["key", "value", "updatedAt"];
+
+const CATALOG_SNAPSHOT_HEADERS = [
+  "snapshotId",
+  "createdAt",
+  "source",
+  "status",
+  "durationMs",
+  "productCount",
+  "inStockCount",
+  "outOfStockCount",
+  "missingImageCount",
+  "newCount",
+  "removedCount",
+  "changedStockCount",
+  "errorMessage"
+];
+
+const CATALOG_PRODUCT_HEADERS = [
+  "productCode",
+  "productName",
+  "brand",
+  "stockQty",
+  "hasImage",
   "updatedAt"
 ];
 
@@ -193,6 +256,51 @@ function getCrmClientsSheet_() {
   });
   if (changed) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
   return sheet;
+}
+
+function getStructuredSheet_(sheetName, requiredHeaders) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) sheet = ss.insertSheet(sheetName);
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(requiredHeaders);
+    sheet.setFrozenRows(1);
+    return sheet;
+  }
+
+  const lastColumn = Math.max(sheet.getLastColumn(), 1);
+  const headers = sheet.getRange(1, 1, 1, lastColumn).getValues()[0].map(String);
+  let changed = false;
+  requiredHeaders.forEach(function(header) {
+    if (headers.indexOf(header) === -1) {
+      headers.push(header);
+      changed = true;
+    }
+  });
+  if (changed) sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.setFrozenRows(1);
+  return sheet;
+}
+
+function getCrmTasksSheet_() {
+  return getStructuredSheet_(CRM_TASKS_SHEET, CRM_TASK_HEADERS);
+}
+
+function getCrmActivitiesSheet_() {
+  return getStructuredSheet_(CRM_ACTIVITIES_SHEET, CRM_ACTIVITY_HEADERS);
+}
+
+function getCrmSettingsSheet_() {
+  return getStructuredSheet_(CRM_SETTINGS_SHEET, CRM_SETTING_HEADERS);
+}
+
+function getCatalogSnapshotsSheet_() {
+  return getStructuredSheet_(CATALOG_SNAPSHOTS_SHEET, CATALOG_SNAPSHOT_HEADERS);
+}
+
+function getCatalogProductsSheet_() {
+  return getStructuredSheet_(CATALOG_PRODUCTS_SHEET, CATALOG_PRODUCT_HEADERS);
 }
 
 function normalizeShortCode_(value) {
@@ -862,10 +970,53 @@ function cleanupReason_(companyName) {
   return "";
 }
 
-function validateAdminPin_(data) {
-  const configuredPin = String(PropertiesService.getScriptProperties().getProperty("ANALYTICS_ADMIN_PIN") || "").trim();
-  const requestedPin = String((data || {}).pin || (data || {}).adminPin || (data || {}).admin_pin || "").trim();
-  return !configuredPin || requestedPin === configuredPin;
+function validateAdminAccess_(data) {
+  const properties = PropertiesService.getScriptProperties();
+  const configuredToken = String(properties.getProperty("ANALYTICS_ADMIN_TOKEN") || "").trim();
+  const requestedToken = String((data || {}).adminToken || (data || {}).admin_token || "").trim();
+  return Boolean(configuredToken && requestedToken === configuredToken);
+}
+
+function validateCatalogSync_(data) {
+  const properties = PropertiesService.getScriptProperties();
+  const configuredToken = String(properties.getProperty("CATALOG_SYNC_TOKEN") || properties.getProperty("ANALYTICS_ADMIN_TOKEN") || "").trim();
+  const requestedToken = String((data || {}).syncToken || (data || {}).adminToken || "").trim();
+  return Boolean(configuredToken && requestedToken === configuredToken);
+}
+
+function uniqueId_(prefix) {
+  return String(prefix || "ID") + "-" + Utilities.getUuid().replace(/-/g, "").slice(0, 18).toUpperCase();
+}
+
+function readStructuredRows_(sheet, idPrefix) {
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  return values.slice(1).map(function(row, index) {
+    const item = { id: String(idPrefix || "row") + "-" + (index + 2) };
+    headers.forEach(function(header, columnIndex) { item[header] = row[columnIndex]; });
+    return item;
+  });
+}
+
+function appendCrmActivity_(record) {
+  const sheet = getCrmActivitiesSheet_();
+  const now = new Date();
+  const normalized = {
+    activityId: String(record.activityId || uniqueId_("ACT")),
+    companyKey: normalizeCompanyKey_(record.companyKey || record.companyName),
+    companyName: String(record.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120),
+    type: String(record.type || "note").trim().slice(0, 40),
+    stageFrom: String(record.stageFrom || "").trim().slice(0, 40),
+    stageTo: String(record.stageTo || "").trim().slice(0, 40),
+    value: number_(record.value || 0),
+    reason: String(record.reason || "").trim().slice(0, 180),
+    note: String(record.note || "").trim().slice(0, 1000),
+    owner: String(record.owner || "").trim().slice(0, 80),
+    createdAt: record.createdAt || now
+  };
+  const headers = getHeaders_(sheet);
+  sheet.appendRow(headers.map(function(header) { return normalized[header] !== undefined ? normalized[header] : ""; }));
+  return normalized;
 }
 
 function readCrmClients_() {
@@ -880,18 +1031,44 @@ function readCrmClients_() {
   return { ok: true, clients: clients };
 }
 
+function readCrmTasks_() {
+  const tasks = readStructuredRows_(getCrmTasksSheet_(), "task")
+    .filter(function(item) { return String(item.taskId || "").trim(); })
+    .sort(function(a, b) { return reservationDate_(b.createdAt).getTime() - reservationDate_(a.createdAt).getTime(); });
+  return { ok: true, tasks: tasks };
+}
+
+function readCrmActivities_() {
+  const activities = readStructuredRows_(getCrmActivitiesSheet_(), "activity")
+    .filter(function(item) { return String(item.activityId || "").trim(); })
+    .sort(function(a, b) { return reservationDate_(b.createdAt).getTime() - reservationDate_(a.createdAt).getTime(); })
+    .slice(0, 5000);
+  return { ok: true, activities: activities };
+}
+
+function readCrmSettings_() {
+  const rows = readStructuredRows_(getCrmSettingsSheet_(), "setting");
+  const settings = {};
+  rows.forEach(function(item) { if (item.key) settings[String(item.key)] = item.value; });
+  return { ok: true, settings: settings };
+}
+
 function upsertCrmClient_(data) {
   const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
   if (!companyKey || cleanupReason_(companyName)) return { ok: false, error: "invalid_company" };
 
-  const allowedStatuses = ["new", "contact", "negotiation", "active", "cold", "lost"];
+  const allowedStatuses = ["new", "contact", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
+  const phone = String(data.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
   const ownerRaw = String(data.owner || data.consultant || "").trim();
   const owner = ownerRaw ? normalizeConsultor_(ownerRaw).slice(0, 80) : "";
   const nextContactAt = String(data.nextContactAt || "").trim().slice(0, 40);
   const tags = String(data.tags || "").trim().replace(/\s+/g, " ").slice(0, 240);
   const notes = String(data.notes || "").trim().slice(0, 3000);
+  const expectedValue = Math.max(0, number_(data.expectedValue || 0));
+  const lastOutcome = String(data.lastOutcome || "").trim().slice(0, 40);
+  const lostReason = String(data.lostReason || "").trim().slice(0, 180);
   const now = new Date();
   const lock = LockService.getScriptLock();
 
@@ -907,9 +1084,12 @@ function upsertCrmClient_(data) {
     const headers = values[0].map(String);
     const keyIndex = headers.indexOf("companyKey");
     let rowNumber = 0;
+    let previousStatus = "";
     for (let index = 1; index < values.length; index++) {
       if (normalizeCompanyKey_(values[index][keyIndex]) === companyKey) {
         rowNumber = index + 1;
+        const statusIndex = headers.indexOf("status");
+        previousStatus = statusIndex >= 0 ? String(values[index][statusIndex] || "") : "";
         break;
       }
     }
@@ -920,21 +1100,225 @@ function upsertCrmClient_(data) {
     const record = {
       companyKey: companyKey,
       companyName: companyName,
+      phone: phone,
       status: status,
       owner: owner,
       nextContactAt: nextContactAt,
       tags: tags,
       notes: notes,
+      expectedValue: expectedValue,
+      lastOutcome: lastOutcome,
+      lostReason: lostReason,
       createdAt: existingCreatedAt || now,
       updatedAt: now
     };
     const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
     if (rowNumber) sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
     else sheet.appendRow(row);
+    if (previousStatus && previousStatus !== status) {
+      appendCrmActivity_({
+        companyKey: companyKey,
+        companyName: companyName,
+        type: "stage_change",
+        stageFrom: previousStatus,
+        stageTo: status,
+        owner: owner,
+        note: String(data.activityNote || "Etapa atualizada no CRM").slice(0, 1000)
+      });
+    }
     return { ok: true, client: record };
   } finally {
     lock.releaseLock();
   }
+}
+
+function upsertCrmTask_(data) {
+  const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
+  const title = String(data.title || "").trim().replace(/\s+/g, " ").slice(0, 220);
+  if (!companyKey || !title || cleanupReason_(companyName)) return { ok: false, error: "invalid_task" };
+  const taskId = String(data.taskId || uniqueId_("TASK")).trim().slice(0, 80);
+  const priority = ["low", "normal", "high", "urgent"].indexOf(String(data.priority || "")) >= 0 ? String(data.priority) : "normal";
+  const requestedStatus = String(data.status || "open");
+  const status = ["open", "done", "cancelled"].indexOf(requestedStatus) >= 0 ? requestedStatus : "open";
+  const now = new Date();
+  const record = {
+    taskId: taskId,
+    companyKey: companyKey,
+    companyName: companyName,
+    title: title,
+    dueAt: String(data.dueAt || "").trim().slice(0, 40),
+    owner: String(data.owner || "").trim().slice(0, 80),
+    priority: priority,
+    status: status,
+    createdAt: data.createdAt || now,
+    completedAt: status === "done" ? (data.completedAt || now) : ""
+  };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "task_busy" }; }
+  try {
+    const sheet = getCrmTasksSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const idIndex = headers.indexOf("taskId");
+    let rowNumber = 0;
+    for (let index = 1; index < values.length; index++) {
+      if (String(values[index][idIndex] || "") === taskId) {
+        rowNumber = index + 1;
+        const createdIndex = headers.indexOf("createdAt");
+        if (createdIndex >= 0 && values[index][createdIndex]) record.createdAt = values[index][createdIndex];
+        break;
+      }
+    }
+    const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+    if (rowNumber) sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
+    else sheet.appendRow(row);
+    return { ok: true, task: record };
+  } finally { lock.releaseLock(); }
+}
+
+function completeCrmTask_(data) {
+  const taskId = String(data.taskId || "").trim();
+  if (!taskId) return { ok: false, error: "invalid_task" };
+  const sheet = getCrmTasksSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idIndex = headers.indexOf("taskId");
+  const statusIndex = headers.indexOf("status");
+  const completedIndex = headers.indexOf("completedAt");
+  for (let index = 1; index < values.length; index++) {
+    if (String(values[index][idIndex] || "") !== taskId) continue;
+    sheet.getRange(index + 1, statusIndex + 1).setValue("done");
+    sheet.getRange(index + 1, completedIndex + 1).setValue(new Date());
+    return { ok: true, taskId: taskId };
+  }
+  return { ok: false, error: "task_not_found" };
+}
+
+function recordCrmActivity_(data) {
+  const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
+  if (!companyKey || cleanupReason_(companyName)) return { ok: false, error: "invalid_company" };
+  const activity = appendCrmActivity_({
+    companyKey: companyKey,
+    companyName: companyName,
+    type: data.type,
+    stageFrom: data.stageFrom,
+    stageTo: data.stageTo,
+    value: data.value,
+    reason: data.reason,
+    note: data.note,
+    owner: data.owner
+  });
+  return { ok: true, activity: activity };
+}
+
+function updateCrmSettings_(data) {
+  const allowedKeys = { monthlyTarget: true, targetMonth: true, companyDisplayName: true };
+  const updates = data.settings && typeof data.settings === "object" ? data.settings : {};
+  const keys = Object.keys(updates).filter(function(key) { return allowedKeys[key]; });
+  if (!keys.length) return { ok: false, error: "no_settings" };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "settings_busy" }; }
+  try {
+    const sheet = getCrmSettingsSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const keyIndex = headers.indexOf("key");
+    keys.forEach(function(key) {
+      let rowNumber = 0;
+      for (let index = 1; index < values.length; index++) {
+        if (String(values[index][keyIndex]) === key) { rowNumber = index + 1; break; }
+      }
+      const record = { key: key, value: String(updates[key]).slice(0, 240), updatedAt: new Date() };
+      const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+      if (rowNumber) sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
+      else sheet.appendRow(row);
+    });
+    return readCrmSettings_();
+  } finally { lock.releaseLock(); }
+}
+
+function normalizeCatalogProducts_(value) {
+  const source = Array.isArray(value) ? value : [];
+  const byCode = {};
+  source.slice(0, 10000).forEach(function(item) {
+    const code = String(item && (item.productCode || item.code || item.codigo) || "").trim().slice(0, 80);
+    if (!code) return;
+    byCode[code] = {
+      productCode: code,
+      productName: String(item.productName || item.name || item.descricao || "").trim().replace(/\s+/g, " ").slice(0, 240),
+      brand: String(item.brand || item.marca || "").trim().replace(/\s+/g, " ").slice(0, 80),
+      stockQty: Math.max(0, number_(item.stockQty !== undefined ? item.stockQty : (item.stock !== undefined ? item.stock : item.estoque))),
+      hasImage: Boolean(item.hasImage !== undefined ? item.hasImage : (item.image || item.imagem || item.imageUrl)),
+      updatedAt: new Date()
+    };
+  });
+  return Object.keys(byCode).map(function(code) { return byCode[code]; });
+}
+
+function syncCatalogSnapshot_(data) {
+  if (!validateCatalogSync_(data)) return { ok: false, error: "invalid_sync_token" };
+  const products = normalizeCatalogProducts_(data.products);
+  const status = String(data.status || "success").toLowerCase() === "error" ? "error" : "success";
+  if (status === "success" && !products.length) return { ok: false, error: "empty_catalog" };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(30000); } catch (err) { return { ok: false, error: "catalog_busy" }; }
+  try {
+    const productSheet = getCatalogProductsSheet_();
+    const previous = readStructuredRows_(productSheet, "catalog");
+    const previousMap = {};
+    previous.forEach(function(item) { if (item.productCode) previousMap[String(item.productCode)] = item; });
+    const currentMap = {};
+    products.forEach(function(item) { currentMap[item.productCode] = item; });
+    let newCount = 0;
+    let changedStockCount = 0;
+    products.forEach(function(item) {
+      if (!previousMap[item.productCode]) newCount++;
+      else if (number_(previousMap[item.productCode].stockQty) !== item.stockQty) changedStockCount++;
+    });
+    const removedCount = Object.keys(previousMap).filter(function(code) { return !currentMap[code]; }).length;
+
+    if (status === "success") {
+      const headers = getHeaders_(productSheet);
+      const previousRows = Math.max(0, productSheet.getLastRow() - 1);
+      if (previousRows) productSheet.getRange(2, 1, previousRows, headers.length).clearContent();
+      const rows = products.map(function(item) { return headers.map(function(header) { return item[header] !== undefined ? item[header] : ""; }); });
+      if (rows.length) writeRowsInChunks_(productSheet, 2, rows);
+    }
+
+    const inStockCount = products.filter(function(item) { return item.stockQty > 0; }).length;
+    const missingImageCount = products.filter(function(item) { return !item.hasImage; }).length;
+    const snapshot = {
+      snapshotId: uniqueId_("SNAP"),
+      createdAt: new Date(),
+      source: String(data.source || "catalog-daily-update").slice(0, 100),
+      status: status,
+      durationMs: Math.max(0, number_(data.durationMs || 0)),
+      productCount: products.length || number_(data.productCount || 0),
+      inStockCount: inStockCount,
+      outOfStockCount: Math.max(0, products.length - inStockCount),
+      missingImageCount: missingImageCount,
+      newCount: newCount,
+      removedCount: removedCount,
+      changedStockCount: changedStockCount,
+      errorMessage: String(data.errorMessage || "").slice(0, 500)
+    };
+    const snapshotSheet = getCatalogSnapshotsSheet_();
+    const snapshotHeaders = getHeaders_(snapshotSheet);
+    snapshotSheet.appendRow(snapshotHeaders.map(function(header) { return snapshot[header] !== undefined ? snapshot[header] : ""; }));
+    return { ok: true, snapshot: snapshot };
+  } finally { lock.releaseLock(); }
+}
+
+function readCatalogHealth_() {
+  const snapshots = readStructuredRows_(getCatalogSnapshotsSheet_(), "snapshot")
+    .filter(function(item) { return item.snapshotId; })
+    .sort(function(a, b) { return reservationDate_(b.createdAt).getTime() - reservationDate_(a.createdAt).getTime(); })
+    .slice(0, 120);
+  const products = readStructuredRows_(getCatalogProductsSheet_(), "catalog")
+    .filter(function(item) { return item.productCode; });
+  return { ok: true, snapshots: snapshots, products: products, latest: snapshots[0] || null };
 }
 
 function getCompanyFromEventRow_(row, headers) {
@@ -1023,7 +1407,7 @@ function replaceEventRows_(sheet, headers, rows) {
 }
 
 function cleanupSelectedCompanies_(data) {
-  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
+  if (!validateAdminAccess_(data)) return { ok: false, error: "unauthorized" };
   const requestedKeys = Array.isArray(data.companyKeys) ? data.companyKeys.slice(0, 100) : [];
   const selected = {};
   requestedKeys.forEach(function(value) {
@@ -1074,7 +1458,7 @@ function cleanupSelectedCompanies_(data) {
 }
 
 function mergeCompanies_(data) {
-  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
+  if (!validateAdminAccess_(data)) return { ok: false, error: "unauthorized" };
   const merges = Array.isArray(data.merges) ? data.merges.slice(0, 50) : [];
   if (!merges.length) return { ok: false, error: "no_merges_selected" };
 
@@ -1124,7 +1508,7 @@ function mergeCompanies_(data) {
 }
 
 function clearEvents_(data) {
-  if (!validateAdminPin_(data)) return { ok: false, error: "invalid_pin" };
+  if (!validateAdminAccess_(data)) return { ok: false, error: "unauthorized" };
 
   const sheet = getEventsSheet_();
   const lastRow = sheet.getLastRow();
@@ -1146,7 +1530,27 @@ function doPost(e) {
   if (action === "sync_reservations") return jsonOutput(syncReservations_(data));
   if (action === "quote_reservations") return jsonOutput(quoteReservations_(data));
   if (action === "release_reservations") return jsonOutput(releaseReservations_(data));
+  if (action === "catalog_snapshot") return jsonOutput(syncCatalogSnapshot_(data));
+
+  const adminActions = {
+    upsert_crm_client: true,
+    upsert_crm_task: true,
+    complete_crm_task: true,
+    record_crm_activity: true,
+    update_crm_settings: true,
+    cleanup_selected_companies: true,
+    merge_companies: true,
+    clear_events: true,
+    reset: true,
+    clear: true
+  };
+  if (adminActions[action] && !validateAdminAccess_(data)) return jsonOutput({ ok: false, error: "unauthorized" });
+
   if (action === "upsert_crm_client") return jsonOutput(upsertCrmClient_(data));
+  if (action === "upsert_crm_task") return jsonOutput(upsertCrmTask_(data));
+  if (action === "complete_crm_task") return jsonOutput(completeCrmTask_(data));
+  if (action === "record_crm_activity") return jsonOutput(recordCrmActivity_(data));
+  if (action === "update_crm_settings") return jsonOutput(updateCrmSettings_(data));
   if (action === "cleanup_selected_companies") return jsonOutput(cleanupSelectedCompanies_(data));
   if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
@@ -1156,20 +1560,38 @@ function doPost(e) {
 
 function doGet(e) {
   const action = e && e.parameter && (e.parameter.action || e.parameter.mode);
+  const params = e && e.parameter ? e.parameter : {};
+
+  if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
+  if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
+  if (action === "track") return jsonOutput(appendEvent_(params));
+
+  const adminReads = {
+    events: true,
+    summary: true,
+    reservations_admin: true,
+    crm_clients: true,
+    crm_tasks: true,
+    crm_activities: true,
+    crm_settings: true,
+    catalog_health: true,
+    cleanup_candidates: true,
+    clear_events: true,
+    reset: true,
+    clear: true
+  };
+  if (adminReads[action] && !validateAdminAccess_(params)) return jsonOutput({ ok: false, error: "unauthorized" });
 
   if (action === "events") return jsonOutput(readEvents_());
   if (action === "summary") return jsonOutput(getSummary_());
-  if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
-  if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
   if (action === "reservations_admin") return jsonOutput(getAdminReservations_());
   if (action === "crm_clients") return jsonOutput(readCrmClients_());
+  if (action === "crm_tasks") return jsonOutput(readCrmTasks_());
+  if (action === "crm_activities") return jsonOutput(readCrmActivities_());
+  if (action === "crm_settings") return jsonOutput(readCrmSettings_());
+  if (action === "catalog_health") return jsonOutput(readCatalogHealth_());
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
-  if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(e.parameter || {}));
+  if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));
 
-  if (action === "track") {
-    const params = e.parameter || {};
-    return jsonOutput(appendEvent_(params));
-  }
-
-  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 10 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 11 + Reservas V1" });
 }

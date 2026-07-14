@@ -28,16 +28,7 @@ import { ExecutiveHeader } from "./components/ExecutiveHeader.jsx";
 import { StatGrid } from "./components/StatGrid.jsx";
 import { RankingTable } from "./components/RankingTable.jsx";
 
-const ANALYTICS_API_URL =
-  import.meta.env.VITE_ANALYTICS_API_URL ||
-  "https://script.google.com/macros/s/AKfycbxcISxjVLPj5mBz0oem-5FrDjL0fOf2NtX6Ry5prry2AIWce5Tsn2NwRinB2tQKMs0T/exec";
-
-const ADMIN_PIN = String(import.meta.env.VITE_ANALYTICS_ADMIN_PIN || "").trim();
-
-const ANALYTICS_LOGIN_USER = String(import.meta.env.VITE_ANALYTICS_LOGIN_USER || "").trim();
-const ANALYTICS_LOGIN_PASSWORD = String(import.meta.env.VITE_ANALYTICS_LOGIN_PASSWORD || "").trim();
-const AUTH_STORAGE_KEY = "zconnect_analytics_authenticated";
-const isLoginConfigured = Boolean(ANALYTICS_LOGIN_USER && ANALYTICS_LOGIN_PASSWORD);
+const ANALYTICS_API_URL = "/api/analytics";
 const EMPTY_PERIOD_MESSAGE = "Nenhum evento registrado no período.";
 const EMPTY_LIST_MESSAGE = "Sem dados no período.";
 const RESET_SUCCESS_MESSAGE = "Dados de teste limpos com sucesso";
@@ -63,6 +54,18 @@ const EVENT_LABELS = {
   special_offer_created: "Oferta criada",
   special_offer_opened: "Oferta aberta"
 };
+
+const PIPELINE_STAGES = [
+  { key: "new", label: "Novo interesse" },
+  { key: "contact", label: "Contato necessário" },
+  { key: "quoted", label: "Cotação enviada" },
+  { key: "negotiation", label: "Negociação" },
+  { key: "waiting", label: "Aguardando cliente" },
+  { key: "won", label: "Pedido fechado" },
+  { key: "lost", label: "Perdido" }
+];
+
+const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desistiu", "Comprou de outro fornecedor", "Outro"];
 
 const EVENT_HISTORY_COLUMNS = [
   { key: "dateTime", label: "Data/hora", className: "col-time" },
@@ -277,7 +280,10 @@ function crmStatusLabel(status) {
   const labels = {
     new: "Novo",
     contact: "Em contato",
+    quoted: "Cotação enviada",
     negotiation: "Negociação",
+    waiting: "Aguardando cliente",
+    won: "Pedido fechado",
     active: "Cliente ativo",
     cold: "Frio",
     lost: "Perdido"
@@ -420,12 +426,19 @@ function parseEvents(payload) {
 
 async function fetchEvents() {
   const url = `${ANALYTICS_API_URL}?action=events&cache=${Date.now()}`;
-  const response = await fetch(url, { method: "GET" });
+  const response = await fetch(url, { method: "GET", cache: "no-store" });
+  if (response.status === 401) throw new Error("unauthorized");
   if (!response.ok) throw new Error("Não foi possível carregar os eventos.");
   const text = await response.text();
   try {
-    return parseEvents(JSON.parse(text));
+    const data = JSON.parse(text);
+    if (data?.ok === false) throw new Error(data.error === "unauthorized" ? "Integração administrativa não autorizada. Confira ANALYTICS_ADMIN_TOKEN." : data.error);
+    return parseEvents(data);
   } catch {
+    if (text.trim().startsWith("{")) {
+      const data = JSON.parse(text);
+      throw new Error(data?.error === "unauthorized" ? "Integração administrativa não autorizada. Confira ANALYTICS_ADMIN_TOKEN." : (data?.error || "Resposta inválida do Analytics."));
+    }
     const lines = text.trim().split(/\r?\n/).filter(Boolean);
     const rows = lines.slice(1).map((line) => line.split(","));
     return parseEvents(rows);
@@ -483,8 +496,10 @@ function normalizeReservation(row, index) {
 async function fetchActiveReservations() {
   const url = `${ANALYTICS_API_URL}?action=reservations_admin&cache=${Date.now()}`;
   const response = await fetch(url, { method: "GET", cache: "no-store" });
+  if (response.status === 401) throw new Error("unauthorized");
   if (!response.ok) throw new Error("Não foi possível carregar os carrinhos ativos.");
   const data = await response.json();
+  if (data?.ok === false) throw new Error(data.error || "Falha ao carregar carrinhos ativos.");
   const rows = Array.isArray(data?.reservations) ? data.reservations : [];
   return rows.map(normalizeReservation);
 }
@@ -492,6 +507,7 @@ async function fetchActiveReservations() {
 async function fetchAnalyticsAction(action) {
   const url = `${ANALYTICS_API_URL}?action=${encodeURIComponent(action)}&cache=${Date.now()}`;
   const response = await fetch(url, { method: "GET", cache: "no-store" });
+  if (response.status === 401) throw new Error("unauthorized");
   if (!response.ok) throw new Error(`Falha ao carregar ${action}.`);
   const data = await response.json();
   if (!data?.ok) throw new Error(data?.error || `Falha ao carregar ${action}.`);
@@ -506,6 +522,7 @@ async function postAnalyticsAction(action, payload = {}) {
   });
   const data = await response.json().catch(() => null);
   if (!response.ok || !data?.ok) {
+    if (response.status === 401 || data?.error === "unauthorized") throw new Error("unauthorized");
     if (data?.error === "invalid_pin") throw new Error("PIN administrativo inválido.");
     throw new Error(data?.error || "Não foi possível concluir a operação.");
   }
@@ -518,12 +535,40 @@ async function fetchCrmClients() {
     ...client,
     companyKey: String(client.companyKey || ""),
     companyName: normalizeCompany(client.companyName),
+    phone: String(client.phone || ""),
     status: String(client.status || "new"),
     owner: String(client.owner || ""),
     nextContactAt: String(client.nextContactAt || ""),
     tags: String(client.tags || ""),
-    notes: String(client.notes || "")
+    notes: String(client.notes || ""),
+    expectedValue: safeNumber(client.expectedValue),
+    lastOutcome: String(client.lastOutcome || ""),
+    lostReason: String(client.lostReason || "")
   }));
+}
+
+async function fetchCrmTasks() {
+  const data = await fetchAnalyticsAction("crm_tasks");
+  return Array.isArray(data.tasks) ? data.tasks : [];
+}
+
+async function fetchCrmActivities() {
+  const data = await fetchAnalyticsAction("crm_activities");
+  return Array.isArray(data.activities) ? data.activities : [];
+}
+
+async function fetchCrmSettings() {
+  const data = await fetchAnalyticsAction("crm_settings");
+  return data.settings && typeof data.settings === "object" ? data.settings : {};
+}
+
+async function fetchCatalogHealth() {
+  const data = await fetchAnalyticsAction("catalog_health");
+  return {
+    snapshots: Array.isArray(data.snapshots) ? data.snapshots : [],
+    products: Array.isArray(data.products) ? data.products : [],
+    latest: data.latest || null
+  };
 }
 
 async function fetchCleanupCandidates() {
@@ -532,28 +577,7 @@ async function fetchCleanupCandidates() {
 }
 
 async function clearEvents(pin) {
-  const body = JSON.stringify({ action: "clear_events", pin });
-  const readResetError = (data, fallback) => {
-    if (data?.error === "invalid_pin") return "PIN inválido.";
-    return data?.error || fallback || "Falha ao limpar eventos.";
-  };
-
-  try {
-    const response = await fetch(ANALYTICS_API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body
-    });
-    const data = await response.json();
-    if (!data.ok) throw new Error(readResetError(data));
-    return data;
-  } catch (error) {
-    const fallbackUrl = `${ANALYTICS_API_URL}?action=clear_events&pin=${encodeURIComponent(pin || "")}&cache=${Date.now()}`;
-    const response = await fetch(fallbackUrl, { method: "GET" });
-    const data = await response.json();
-    if (!data.ok) throw new Error(readResetError(data, error.message));
-    return data;
-  }
+  return postAnalyticsAction("clear_events", { pin });
 }
 
 function startOfDay(date) {
@@ -1391,6 +1415,7 @@ function companyActivityRows(events) {
 
 function buildCrmRows(events, reservations, crmClients) {
   const metadata = new Map(crmClients.map((client) => [companyKey(client.companyKey || client.companyName), client]));
+  const map = new Map();
   const carts = new Map();
   reservations.forEach((item) => {
     const key = companyKey(item.company);
@@ -1402,7 +1427,29 @@ function buildCrmRows(events, reservations, crmClients) {
     if (item.product) cart.products.add(item.product);
   });
 
-  const map = new Map();
+  crmClients.forEach((client) => {
+    const company = normalizeCompany(client.companyName);
+    const key = companyKey(client.companyKey || company);
+    if (!key || cleanupReason(company) || map.has(key)) return;
+    map.set(key, {
+      companyKey: key,
+      company,
+      consultant: client.owner ? normalizeConsultant(client.owner).toUpperCase() : "SEM_CONSULTOR",
+      totalActions: 0,
+      accesses: 0,
+      searches: 0,
+      noResults: 0,
+      productOpen: 0,
+      added: 0,
+      quotes: 0,
+      quoteTotalNumber: 0,
+      score: 0,
+      days: new Set(),
+      products: new Map(),
+      lastEventRaw: ""
+    });
+  });
+
   events.forEach((event) => {
     const company = normalizeCompany(event.companyName);
     if (isAnonymousCompany(company) || cleanupReason(company)) return;
@@ -1481,17 +1528,21 @@ function buildCrmRows(events, reservations, crmClients) {
     const meta = metadata.get(row.companyKey) || {};
     const cart = carts.get(row.companyKey) || { reserved: 0, excess: 0, products: new Set() };
     const topProducts = [...row.products.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name]) => name);
-    const statusKey = String(meta.status || (cart.reserved ? "negotiation" : row.quotes ? "active" : "new"));
+    const statusKey = String(meta.status || (cart.reserved ? "negotiation" : row.quotes ? "quoted" : "new"));
     return {
       ...row,
       id: `crm-${row.companyKey}`,
       statusKey,
       status: crmStatusLabel(statusKey),
+      phone: String(meta.phone || ""),
       owner: meta.owner ? normalizeConsultant(meta.owner).toUpperCase() : row.consultant,
       nextContactAt: String(meta.nextContactAt || ""),
       nextContact: meta.nextContactAt ? dateOnly(meta.nextContactAt) : "-",
       tags: String(meta.tags || ""),
       notes: String(meta.notes || ""),
+      expectedValue: safeNumber(meta.expectedValue),
+      lastOutcome: String(meta.lastOutcome || ""),
+      lostReason: String(meta.lostReason || ""),
       activeCartQty: cart.reserved,
       cartExcessQty: cart.excess,
       activeCartProducts: [...cart.products].slice(0, 8),
@@ -1561,6 +1612,137 @@ function buildOpportunityRows(crmRows, events) {
       interest: client.activeCartProducts[0] || signal.lastProduct || client.topProducts[0] || "-"
     };
   }).filter((row) => row.reason).sort((a, b) => b.priority - a.priority || b.score - a.score);
+}
+
+function normalizeCrmTask(task) {
+  return {
+    ...task,
+    taskId: String(task.taskId || task.id || ""),
+    companyKey: companyKey(task.companyKey || task.companyName),
+    companyName: normalizeCompany(task.companyName),
+    title: String(task.title || "Tarefa comercial"),
+    dueAt: String(task.dueAt || ""),
+    owner: String(task.owner || "").toUpperCase(),
+    priority: String(task.priority || "normal"),
+    status: String(task.status || "open")
+  };
+}
+
+function normalizeCrmActivity(activity) {
+  return {
+    ...activity,
+    activityId: String(activity.activityId || activity.id || ""),
+    companyKey: companyKey(activity.companyKey || activity.companyName),
+    companyName: normalizeCompany(activity.companyName),
+    type: String(activity.type || "note"),
+    valueNumber: safeNumber(activity.value),
+    createdAtRaw: activity.createdAt,
+    createdAtLabel: dateTime(activity.createdAt)
+  };
+}
+
+function buildActionCenterRows(opportunities, tasks, crmRows) {
+  const clientMap = new Map(crmRows.map((client) => [client.companyKey, client]));
+  const now = new Date();
+  const taskRows = tasks.filter((task) => task.status === "open").map((task) => {
+    const client = clientMap.get(task.companyKey) || {
+      id: `crm-${task.companyKey}`,
+      companyKey: task.companyKey,
+      company: task.companyName,
+      owner: task.owner,
+      statusKey: "contact",
+      status: crmStatusLabel("contact"),
+      topProducts: [],
+      activeCartProducts: [],
+      quoteTotal: money(0),
+      score: 0
+    };
+    const due = crmContactDate(task.dueAt);
+    const overdue = due && due.getTime() < startOfDay(now).getTime();
+    const dueToday = due && due.toDateString() === now.toDateString();
+    const priority = overdue ? 125 : dueToday ? 115 : task.priority === "urgent" ? 110 : task.priority === "high" ? 95 : 75;
+    return {
+      ...client,
+      id: `action-task-${task.taskId}`,
+      actionType: "task",
+      taskId: task.taskId,
+      priority,
+      level: overdue ? "urgent" : priority >= 110 ? "hot" : "high",
+      reason: overdue ? `Retorno atrasado: ${task.title}` : dueToday ? `Retorno para hoje: ${task.title}` : task.title,
+      interest: task.dueAt ? `Prazo: ${dateOnly(task.dueAt)}` : "Sem prazo definido"
+    };
+  });
+  const opportunityActions = opportunities.map((item) => ({ ...item, actionType: "opportunity", id: `action-${item.id}` }));
+  return [...taskRows, ...opportunityActions].sort((a, b) => b.priority - a.priority || b.score - a.score);
+}
+
+function buildDemandStockRows(events, catalogProducts, reservations) {
+  const catalog = new Map(catalogProducts.map((item) => [String(item.productCode || "").trim(), item]));
+  const reserved = new Map();
+  reservations.forEach((item) => {
+    const code = String(item.productCode || "").trim();
+    if (code) reserved.set(code, (reserved.get(code) || 0) + safeNumber(item.reservedNumber ?? item.reservedQty));
+  });
+  const map = new Map();
+  function touch(product, type, quantity = 1) {
+    const code = String(product?.productCode || product?.code || "").trim();
+    if (!code) return;
+    if (!map.has(code)) map.set(code, { productCode: code, productName: String(product?.productName || product?.name || ""), views: 0, carts: 0, quotes: 0 });
+    const row = map.get(code);
+    if (type === "view") row.views += 1;
+    if (type === "cart") row.carts += Math.max(1, safeNumber(quantity));
+    if (type === "quote") row.quotes += Math.max(1, safeNumber(quantity));
+  }
+  events.forEach((event) => {
+    if (event.event === "product_open") touch(productFromEvent(event), "view");
+    if (event.event === "add_to_cart") touch(productFromEvent(event), "cart", event.quantity);
+    if (event.event === "whatsapp_quote") quoteProducts(event).forEach((product) => touch(product, "quote", productQuantity(product, 1)));
+  });
+  return [...map.values()].map((row) => {
+    const product = catalog.get(row.productCode) || {};
+    const stockQty = safeNumber(product.stockQty);
+    const reservedQty = reserved.get(row.productCode) || 0;
+    const availableQty = Math.max(0, stockQty - reservedQty);
+    const demandScore = row.views + row.carts * 3 + row.quotes * 10;
+    const pressure = demandScore && catalog.has(row.productCode) ? demandScore / Math.max(1, availableQty) : 0;
+    let signal = "Demanda normal";
+    if (!catalog.has(row.productCode)) signal = "Sem snapshot de estoque";
+    else if (availableQty <= 0 && demandScore) signal = "Procura sem disponibilidade";
+    else if (pressure >= 8) signal = "Reposição prioritária";
+    else if (pressure >= 3) signal = "Estoque sob pressão";
+    return {
+      ...row,
+      id: `demand-${row.productCode}`,
+      productName: row.productName || product.productName || "Produto sem descrição",
+      brand: String(product.brand || ""),
+      stockQty,
+      reservedQty,
+      availableQty,
+      demandScore,
+      pressure,
+      signal,
+      _search: [row.productCode, row.productName, product.productName, product.brand, signal].join(" ").toLowerCase()
+    };
+  }).sort((a, b) => b.pressure - a.pressure || b.demandScore - a.demandScore);
+}
+
+function buildAlerts({ actionRows, tasks, reservationKpis, catalogHealth }) {
+  const alerts = [];
+  const overdue = tasks.filter((task) => task.status === "open" && crmContactDate(task.dueAt) && crmContactDate(task.dueAt) < startOfDay(new Date())).length;
+  if (overdue) alerts.push({ level: "urgent", title: `${overdue} retorno(s) atrasado(s)`, detail: "Priorize os clientes com tarefa vencida.", view: "opportunities" });
+  if (reservationKpis.excess) alerts.push({ level: "urgent", title: `${reservationKpis.excess} unidade(s) acima do estoque`, detail: "Há clientes aguardando consulta comercial.", view: "carts" });
+  if (reservationKpis.carts) alerts.push({ level: "hot", title: `${reservationKpis.carts} carrinho(s) ativo(s)`, detail: "Reservas temporárias estão acontecendo agora.", view: "carts" });
+  const urgentActions = actionRows.filter((item) => item.priority >= 100).length;
+  if (urgentActions) alerts.push({ level: "high", title: `${urgentActions} oportunidade(s) prioritária(s)`, detail: "A fila comercial está ordenada por urgência.", view: "opportunities" });
+  const latest = catalogHealth.latest;
+  if (!latest) alerts.push({ level: "medium", title: "Monitor do catálogo aguardando integração", detail: "Envie o primeiro snapshot diário para ativar estoque e saúde da atualização.", view: "catalog" });
+  else {
+    const age = Date.now() - new Date(latest.createdAt).getTime();
+    if (latest.status === "error") alerts.push({ level: "urgent", title: "Última atualização do catálogo falhou", detail: latest.errorMessage || "Confira o processo diário.", view: "catalog" });
+    else if (age > 36 * 60 * 60 * 1000) alerts.push({ level: "high", title: "Catálogo sem atualização recente", detail: `Último registro: ${dateTime(latest.createdAt)}.`, view: "catalog" });
+    if (safeNumber(latest.missingImageCount)) alerts.push({ level: "medium", title: `${latest.missingImageCount} produto(s) sem imagem`, detail: "Revise a qualidade visual do catálogo.", view: "catalog" });
+  }
+  return alerts;
 }
 
 function buildCleanupCandidates(events) {
@@ -1870,25 +2052,29 @@ function LoginScreen({ onLogin }) {
   const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  function handleSubmit(event) {
+  async function handleSubmit(event) {
     event.preventDefault();
-
-    if (!isLoginConfigured) {
-      setError("Login ainda não configurado. Cadastre usuário e senha nas variáveis da Vercel.");
-      return;
+    setError("");
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user: user.trim(), password })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        if (data.error === "auth_not_configured") throw new Error("Login seguro ainda não configurado na Vercel.");
+        throw new Error("Usuário ou senha inválidos.");
+      }
+      onLogin(data.user);
+    } catch (loginError) {
+      setError(loginError.message || "Não foi possível entrar.");
+    } finally {
+      setIsSubmitting(false);
     }
-
-    const validUser = user.trim() === ANALYTICS_LOGIN_USER;
-    const validPassword = password === ANALYTICS_LOGIN_PASSWORD;
-
-    if (!validUser || !validPassword) {
-      setError("Usuário ou senha inválidos.");
-      return;
-    }
-
-    window.localStorage.setItem(AUTH_STORAGE_KEY, "true");
-    onLogin();
   }
 
   return (
@@ -1925,11 +2111,11 @@ function LoginScreen({ onLogin }) {
 
           {error ? <p className="login-error">{error}</p> : null}
 
-          <button className="login-submit" type="submit">Entrar no Analytics</button>
+          <button className="login-submit" type="submit" disabled={isSubmitting}>{isSubmitting ? "Entrando..." : "Entrar no Analytics"}</button>
         </form>
 
         <p className="login-note">
-          O cadastro de acesso é feito apenas nas variáveis locais/Vercel. Não existe cadastro público online.
+          A sessão é protegida no servidor e expira automaticamente. Não existe cadastro público online.
         </p>
       </section>
     </main>
@@ -1937,10 +2123,15 @@ function LoginScreen({ onLogin }) {
 }
 
 function App() {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => window.localStorage.getItem(AUTH_STORAGE_KEY) === "true");
+  const [authStatus, setAuthStatus] = useState("checking");
+  const [authUser, setAuthUser] = useState("");
   const [events, setEvents] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [crmClients, setCrmClients] = useState([]);
+  const [crmTasks, setCrmTasks] = useState([]);
+  const [crmActivities, setCrmActivities] = useState([]);
+  const [crmSettings, setCrmSettings] = useState({});
+  const [catalogHealth, setCatalogHealth] = useState({ snapshots: [], products: [], latest: null });
   const [status, setStatus] = useState("Carregando eventos reais...");
   const [period, setPeriod] = useState("today");
   const [dateFrom, setDateFrom] = useState(() => {
@@ -1953,7 +2144,6 @@ function App() {
   const [company, setCompany] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
   const [productFilter, setProductFilter] = useState("");
-  const [adminPin, setAdminPin] = useState("");
   const [resetStatus, setResetStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
@@ -1967,23 +2157,49 @@ function App() {
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
 
+  useEffect(() => {
+    let active = true;
+    fetch("/api/session", { cache: "no-store" })
+      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
+      .then(({ response, data }) => {
+        if (!active) return;
+        if (response.ok && data.authenticated) {
+          setAuthUser(data.user || "admin");
+          setAuthStatus("authenticated");
+        } else {
+          setAuthStatus("anonymous");
+        }
+      })
+      .catch(() => { if (active) setAuthStatus("anonymous"); });
+    return () => { active = false; };
+  }, []);
+
   async function load(options = {}) {
     const silent = options?.silent === true;
     if (!silent) setStatus("Carregando eventos reais...");
     setIsLoading(true);
     try {
-      const [data, activeReservations, savedCrmClients] = await Promise.all([
+      const [data, activeReservations, savedCrmClients, savedTasks, savedActivities, savedSettings, savedCatalogHealth] = await Promise.all([
         fetchEvents(),
         fetchActiveReservations().catch(() => []),
-        fetchCrmClients().catch(() => [])
+        fetchCrmClients().catch(() => []),
+        fetchCrmTasks().catch(() => []),
+        fetchCrmActivities().catch(() => []),
+        fetchCrmSettings().catch(() => ({})),
+        fetchCatalogHealth().catch(() => ({ snapshots: [], products: [], latest: null }))
       ]);
       setEvents(data);
       setReservations(activeReservations);
       setCrmClients(savedCrmClients);
+      setCrmTasks(savedTasks);
+      setCrmActivities(savedActivities);
+      setCrmSettings(savedSettings);
+      setCatalogHealth(savedCatalogHealth);
       setLastUpdatedAt(new Date());
       const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
       setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
     } catch (error) {
+      if (error.message === "unauthorized") setAuthStatus("anonymous");
       setEvents([]);
       setReservations([]);
       setCrmClients([]);
@@ -1998,12 +2214,12 @@ function App() {
   }
 
   useEffect(() => {
-    if (!isAuthenticated) return undefined;
+    if (authStatus !== "authenticated") return undefined;
 
     load();
     const timer = window.setInterval(load, 30000);
     return () => window.clearInterval(timer);
-  }, [isAuthenticated]);
+  }, [authStatus]);
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -2127,8 +2343,24 @@ function App() {
   const companySearchRank = useMemo(() => countBy(allSearchEvents, (event) => normalizeCompany(event.companyName)), [allSearchEvents]);
   const companyQuoteRank = useMemo(() => countBy(byType.quotes, (event) => normalizeCompany(event.companyName)), [byType.quotes]);
   const companyActivity = useMemo(() => companyActivityRows(filtered), [filtered]);
-  const crmRows = useMemo(() => buildCrmRows(filtered, filteredReservations, crmClients), [filtered, filteredReservations, crmClients]);
+  const crmEventScope = useMemo(() => events.filter((event) => {
+    const okConsultant = consultant === "all" || normalizeConsultant(event.consultant) === consultant;
+    const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
+    return okConsultant && okCompany;
+  }), [events, consultant, company]);
+  const normalizedTasks = useMemo(() => crmTasks.map(normalizeCrmTask).filter((task) => {
+    const okConsultant = consultant === "all" || normalizeConsultant(task.owner) === consultant;
+    const okCompany = company === "all" || normalizeCompany(task.companyName) === company;
+    return okConsultant && okCompany;
+  }), [crmTasks, consultant, company]);
+  const normalizedActivities = useMemo(() => crmActivities.map(normalizeCrmActivity).filter((activity) => (
+    company === "all" || normalizeCompany(activity.companyName) === company
+  )), [crmActivities, company]);
+  const crmRows = useMemo(() => buildCrmRows(crmEventScope, filteredReservations, crmClients), [crmEventScope, filteredReservations, crmClients]);
   const opportunityRows = useMemo(() => buildOpportunityRows(crmRows, filtered), [crmRows, filtered]);
+  const actionRows = useMemo(() => buildActionCenterRows(opportunityRows, normalizedTasks, crmRows), [opportunityRows, normalizedTasks, crmRows]);
+  const demandStockRows = useMemo(() => buildDemandStockRows(filtered, catalogHealth.products || [], filteredReservations), [filtered, catalogHealth.products, filteredReservations]);
+  const alerts = useMemo(() => buildAlerts({ actionRows, tasks: normalizedTasks, reservationKpis, catalogHealth }), [actionRows, normalizedTasks, reservationKpis, catalogHealth]);
   const cleanupCandidates = useMemo(() => buildCleanupCandidates(events), [events]);
   const duplicateCompanyGroups = useMemo(() => buildDuplicateCompanyGroups(events), [events]);
 
@@ -2156,11 +2388,7 @@ function App() {
   const consultantValueRank = useMemo(() => countBy(byType.quotes, (event) => normalizeConsultant(event.consultant), (event) => event.cartTotal || event.total), [byType.quotes]);
   const consultantActivity = useMemo(() => consultantActivityRows(filtered), [filtered]);
 
-  const activityScope = useMemo(() => events.filter((event) => {
-    const okConsultant = consultant === "all" || normalizeConsultant(event.consultant) === consultant;
-    const okCompany = company === "all" || normalizeCompany(event.companyName) === company;
-    return okConsultant && okCompany;
-  }), [events, consultant, company]);
+  const activityScope = crmEventScope;
 
   const dormantCompanies = useMemo(() => dormantCompanyRows(activityScope).slice(0, 20), [activityScope]);
   const commercialInsights = useMemo(() => commercialInsightRows({
@@ -2183,6 +2411,17 @@ function App() {
   const identifiedCompanies = useMemo(() => new Set(
     filtered.map((event) => normalizeCompany(event.companyName)).filter((name) => !isAnonymousCompany(name) && !cleanupReason(name))
   ).size, [filtered]);
+  const monthActivities = useMemo(() => {
+    const now = new Date();
+    return normalizedActivities.filter((item) => {
+      const date = new Date(item.createdAtRaw);
+      return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+    });
+  }, [normalizedActivities]);
+  const wonActivities = useMemo(() => monthActivities.filter((item) => item.type === "won"), [monthActivities]);
+  const lostActivities = useMemo(() => monthActivities.filter((item) => item.type === "lost"), [monthActivities]);
+  const wonValue = useMemo(() => wonActivities.reduce((sum, item) => sum + item.valueNumber, 0), [wonActivities]);
+  const monthlyTarget = safeNumber(crmSettings.monthlyTarget);
 
   useEffect(() => {
     const availableKeys = cleanupCandidates.map((item) => item.companyKey || "__empty__");
@@ -2349,11 +2588,15 @@ function App() {
         ...current,
         statusKey: normalized.status,
         status: crmStatusLabel(normalized.status),
+        phone: normalized.phone,
         owner: normalized.owner ? normalizeConsultant(normalized.owner).toUpperCase() : current.owner,
         nextContactAt: normalized.nextContactAt,
         nextContact: normalized.nextContactAt ? dateOnly(normalized.nextContactAt) : "-",
         tags: normalized.tags,
-        notes: normalized.notes
+        notes: normalized.notes,
+        expectedValue: safeNumber(normalized.expectedValue),
+        lastOutcome: normalized.lastOutcome,
+        lostReason: normalized.lostReason
       } : current);
       showToast("Ficha CRM salva com sucesso.");
       return normalized;
@@ -2362,6 +2605,86 @@ function App() {
       throw error;
     } finally {
       setIsSavingCrm(false);
+    }
+  }
+
+  async function saveCrmTask(form) {
+    try {
+      const result = await postAnalyticsAction("upsert_crm_task", form);
+      const task = normalizeCrmTask(result.task);
+      setCrmTasks((current) => [task, ...current.filter((item) => String(item.taskId || item.id) !== task.taskId)]);
+      showToast("Tarefa comercial criada.");
+      return task;
+    } catch (error) {
+      showToast(error.message || "Não foi possível criar a tarefa.", "error");
+      throw error;
+    }
+  }
+
+  async function completeCrmTask(taskId) {
+    try {
+      await postAnalyticsAction("complete_crm_task", { taskId });
+      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? { ...item, status: "done", completedAt: new Date().toISOString() } : item));
+      showToast("Tarefa concluída.");
+    } catch (error) {
+      showToast(error.message || "Não foi possível concluir a tarefa.", "error");
+    }
+  }
+
+  async function recordClientOutcome(client, outcome) {
+    try {
+      const result = await postAnalyticsAction("record_crm_activity", {
+        companyKey: client.companyKey,
+        companyName: client.company,
+        owner: client.owner,
+        ...outcome
+      });
+      const activity = normalizeCrmActivity(result.activity);
+      setCrmActivities((current) => [activity, ...current]);
+      const status = outcome.type === "won" ? "won" : "lost";
+      await saveClientProfile({
+        companyKey: client.companyKey,
+        companyName: client.company,
+        phone: client.phone || "",
+        status,
+        owner: client.owner || "",
+        nextContactAt: client.nextContactAt || "",
+        tags: client.tags || "",
+        notes: client.notes || "",
+        expectedValue: safeNumber(outcome.value || client.expectedValue),
+        lastOutcome: outcome.note || (status === "won" ? "Pedido fechado" : "Oportunidade perdida"),
+        lostReason: status === "lost" ? outcome.reason || "Outro" : ""
+      });
+      showToast(status === "won" ? "Venda registrada no resultado do mês." : "Perda registrada para análise.");
+    } catch (error) {
+      showToast(error.message || "Não foi possível registrar o resultado.", "error");
+      throw error;
+    }
+  }
+
+  async function moveClientStage(client, status) {
+    await saveClientProfile({
+      companyKey: client.companyKey,
+      companyName: client.company,
+      phone: client.phone || "",
+      status,
+      owner: client.owner || "",
+      nextContactAt: client.nextContactAt || "",
+      tags: client.tags || "",
+      notes: client.notes || "",
+      expectedValue: client.expectedValue || 0,
+      lastOutcome: client.lastOutcome || "",
+      lostReason: status === "lost" ? client.lostReason || "Outro" : ""
+    });
+  }
+
+  async function saveMonthlyTarget(value) {
+    try {
+      const result = await postAnalyticsAction("update_crm_settings", { settings: { monthlyTarget: safeNumber(value), targetMonth: localDateInput(new Date()).slice(0, 7) } });
+      setCrmSettings(result.settings || { ...crmSettings, monthlyTarget: safeNumber(value) });
+      showToast("Meta mensal atualizada.");
+    } catch (error) {
+      showToast(error.message || "Não foi possível salvar a meta.", "error");
     }
   }
 
@@ -2395,12 +2718,16 @@ function App() {
     setQualityStatus("Criando backup e removendo somente os registros selecionados...");
     try {
       const result = await postAnalyticsAction("cleanup_selected_companies", {
-        pin: adminPin.trim(),
         companyKeys: selectedCleanupKeys.map((key) => key === "__empty__" ? "" : key)
       });
       setQualityStatus(`${result.removedEvents} eventos removidos. Backup: ${result.backupSheet}.`);
       showToast(`${result.removedEvents} eventos de teste removidos com segurança.`);
       setSelectedCleanupKeys([]);
+      setPeriod("all");
+      setConsultant("all");
+      setCompany("all");
+      setEventFilter("all");
+      setProductFilter("");
       await load({ silent: true });
     } catch (error) {
       setQualityStatus(error.message || "Falha ao limpar os dados.");
@@ -2419,7 +2746,7 @@ function App() {
     setIsCleaning(true);
     setQualityStatus("Criando backup e unificando nomes duplicados...");
     try {
-      const result = await postAnalyticsAction("merge_companies", { pin: adminPin.trim(), merges });
+      const result = await postAnalyticsAction("merge_companies", { merges });
       setQualityStatus(`${result.mergedEvents} eventos padronizados. Backup: ${result.backupSheet}.`);
       showToast("Nomes duplicados unificados com segurança.");
       await load({ silent: true });
@@ -2513,9 +2840,10 @@ function App() {
     showToast("Relatório executivo exportado.");
   }
 
-  function handleLogout() {
-    window.localStorage.removeItem(AUTH_STORAGE_KEY);
-    setIsAuthenticated(false);
+  async function handleLogout() {
+    await fetch("/api/logout", { method: "POST" }).catch(() => null);
+    setAuthStatus("anonymous");
+    setAuthUser("");
     setEvents([]);
     setStatus("Sessão encerrada.");
   }
@@ -2524,26 +2852,13 @@ function App() {
     if (isResetting) return;
 
     setResetStatus("");
-    const pinToSend = adminPin.trim();
-
-    if (ADMIN_PIN && !pinToSend) {
-      setResetStatus("Informe o PIN admin.");
-      return;
-    }
-
-    if (ADMIN_PIN && pinToSend !== ADMIN_PIN) {
-      setResetStatus("PIN inválido.");
-      showToast(RESET_ERROR_MESSAGE, "error");
-      return;
-    }
-
     const confirmed = window.confirm("Tem certeza que deseja apagar todos os dados de analytics?");
     if (!confirmed) return;
 
     try {
       setIsResetting(true);
       setResetStatus("Limpando eventos...");
-      await clearEvents(ADMIN_PIN ? pinToSend : "");
+      await clearEvents("");
       setEvents([]);
       setLastUpdatedAt(new Date());
       setResetStatus(RESET_SUCCESS_MESSAGE);
@@ -2558,15 +2873,21 @@ function App() {
     }
   }
 
-  if (!isAuthenticated) {
-    return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
+  if (authStatus === "checking") {
+    return <main className="login-page"><section className="login-card auth-checking"><RefreshCw className="spin"/><h1>Validando sessão</h1><p>Preparando a inteligência comercial...</p></section></main>;
+  }
+
+  if (authStatus !== "authenticated") {
+    return <LoginScreen onLogin={(user) => { setAuthUser(user || "admin"); setAuthStatus("authenticated"); }} />;
   }
 
   const navigation = [
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
-    { id: "opportunities", label: "Oportunidades", icon: <AlertTriangle size={17}/>, badge: opportunityRows.filter((item) => item.priority >= 80).length },
+    { id: "opportunities", label: "Ações agora", icon: <AlertTriangle size={17}/>, badge: actionRows.filter((item) => item.priority >= 80).length },
+    { id: "pipeline", label: "Funil", icon: <Filter size={17}/>, badge: crmRows.filter((item) => !["won", "lost"].includes(item.statusKey)).length },
     { id: "crm", label: "Clientes CRM", icon: <Building2 size={17}/>, badge: crmRows.length },
     { id: "products", label: "Produtos", icon: <Flame size={17}/> },
+    { id: "catalog", label: "Catálogo e estoque", icon: <Eye size={17}/>, badge: alerts.filter((item) => item.view === "catalog").length },
     { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
     { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
     { id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length },
@@ -2575,18 +2896,17 @@ function App() {
   const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
   const viewDescriptions = {
     overview: "Os números essenciais para decidir rápido.",
-    opportunities: "Clientes que pedem uma ação comercial agora, ordenados por urgência.",
+    opportunities: "A fila diária combina retornos, carrinhos, cotações e sinais de compra.",
+    pipeline: "Arraste os clientes entre as etapas e acompanhe o avanço comercial.",
     crm: "Histórico, responsável, etapa e próximo contato de cada cliente real.",
     products: "Demanda real, intenção de compra e lacunas do catálogo.",
+    catalog: "Saúde da atualização diária, estoque disponível e demanda por reposição.",
     carts: "O que os clientes estão separando agora, com reserva e excedente em tempo real.",
     offers: "Do link especial criado até a cotação enviada.",
     quality: "Limpeza seletiva, prévia e padronização dos dados sem apagar empresas reais.",
     events: "Histórico detalhado dos eventos do catálogo."
   };
-  const dueFollowUps = crmRows.filter((item) => {
-    const contactDate = crmContactDate(item.nextContactAt);
-    return contactDate && contactDate.getTime() <= endOfDay(new Date()).getTime();
-  }).length;
+  const dueFollowUps = normalizedTasks.filter((item) => item.status === "open" && crmContactDate(item.dueAt) && crmContactDate(item.dueAt).getTime() <= endOfDay(new Date()).getTime()).length;
   const negotiationClients = crmRows.filter((item) => item.statusKey === "negotiation").length;
 
   return (
@@ -2600,6 +2920,7 @@ function App() {
           </div>
         </div>
         <div className="analytics-top-actions">
+          <span className="secure-user"><UserCheck size={14}/> {authUser}</span>
           <button type="button" className="refresh" onClick={() => load()} disabled={isLoading || isResetting}>
             <RefreshCw className={isLoading ? "spin" : undefined} size={16}/>{isLoading ? "Atualizando" : "Atualizar"}
           </button>
@@ -2678,12 +2999,23 @@ function App() {
 
       {activeView === "overview" ? (
         <div className="view-stack">
+          <ExecutiveBrief
+            urgent={actionRows.filter((item) => item.priority >= 100).length}
+            carts={reservationKpis.carts}
+            due={dueFollowUps}
+            alerts={alerts}
+          />
           <StatGrid items={[
-            { icon: <Users/>, label: "Acessos", value: kpis.pageViews, onOpen: () => openEventModal("Acessos", byType.pageViews) },
-            { icon: <Building2/>, label: "Clientes identificados", value: identifiedCompanies, onOpen: openCompanyModal },
-            { icon: <Send/>, label: "Cotações", value: kpis.quotes, onOpen: () => openQuoteModal(), emphasis: true },
-            { icon: <TrendingUp/>, label: "Valor cotado", value: money(kpis.quoteTotal), onOpen: () => openQuoteModal("Valor cotado"), emphasis: true }
+            { icon: <AlertTriangle/>, label: "Ações prioritárias", value: actionRows.filter((item) => item.priority >= 100).length, onOpen: () => setActiveView("opportunities"), emphasis: true },
+            { icon: <ShoppingCart/>, label: "Carrinhos ativos", value: reservationKpis.carts, onOpen: () => setActiveView("carts") },
+            { icon: <CalendarDays/>, label: "Retornos vencidos/hoje", value: dueFollowUps, onOpen: () => setActiveView("opportunities") },
+            { icon: <TrendingUp/>, label: "Vendas registradas no mês", value: money(wonValue), emphasis: true }
           ]}/>
+          <section className="command-grid">
+            <AlertCenter alerts={alerts} onNavigate={setActiveView}/>
+            <GoalPanel target={monthlyTarget} result={wonValue} won={wonActivities.length} lost={lostActivities.length} onSave={saveMonthlyTarget}/>
+          </section>
+          <OpportunityList rows={actionRows.slice(0, 8)} onOpen={openClientProfile}/>
           <section className="overview-grid">
             <article className="panel decision-panel">
               <div className="panel-head"><h2><TrendingUp size={18}/> Caminho até a cotação</h2><span>{quoteConversionRate} de conversão</span></div>
@@ -2707,12 +3039,24 @@ function App() {
       {activeView === "opportunities" ? (
         <div className="view-stack">
           <StatGrid items={[
-            { icon: <Flame/>, label: "Ação imediata", value: opportunityRows.filter((item) => item.priority >= 100).length, emphasis: true },
-            { icon: <ShoppingCart/>, label: "Carrinho sem cotação", value: opportunityRows.filter((item) => item.priority === 90 || item.activeCartQty > 0).length },
-            { icon: <Search/>, label: "Demanda não atendida", value: opportunityRows.filter((item) => item.priority === 70).length },
+            { icon: <Flame/>, label: "Ação imediata", value: actionRows.filter((item) => item.priority >= 100).length, emphasis: true },
+            { icon: <ShoppingCart/>, label: "Carrinho sem cotação", value: actionRows.filter((item) => item.actionType === "opportunity" && (item.priority === 90 || item.activeCartQty > 0)).length },
+            { icon: <Search/>, label: "Demanda não atendida", value: actionRows.filter((item) => item.priority === 70).length },
             { icon: <CalendarDays/>, label: "Retornos vencidos", value: dueFollowUps, emphasis: true }
           ]}/>
-          <OpportunityList rows={opportunityRows} onOpen={openClientProfile}/>
+          <OpportunityList rows={actionRows} onOpen={openClientProfile}/>
+        </div>
+      ) : null}
+
+      {activeView === "pipeline" ? (
+        <div className="view-stack">
+          <StatGrid items={[
+            { icon: <Building2/>, label: "Clientes no funil", value: crmRows.length },
+            { icon: <Send/>, label: "Cotação enviada", value: crmRows.filter((item) => item.statusKey === "quoted").length },
+            { icon: <TrendingUp/>, label: "Em negociação", value: crmRows.filter((item) => item.statusKey === "negotiation").length, emphasis: true },
+            { icon: <UserCheck/>, label: "Pedidos fechados", value: crmRows.filter((item) => item.statusKey === "won").length, emphasis: true }
+          ]}/>
+          <PipelineBoard rows={crmRows} onOpen={openClientProfile} onMove={moveClientStage}/>
         </div>
       ) : null}
 
@@ -2741,12 +3085,17 @@ function App() {
             <MetricTable title="Produtos mais cotados" subtitle="Itens pedidos pelo WhatsApp" rows={quotedProducts} columns={QUOTED_PRODUCT_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<Send size={18}/>} onOpen={openQuotedProductsModal}/>
             <MetricTable title="Oportunidades de cadastro" subtitle="O que foi buscado e não encontrado" rows={noResultDemand.slice(0, 20)} columns={NO_RESULT_DEMAND_COLUMNS.slice(1, 4)} empty={EMPTY_LIST_MESSAGE} icon={<AlertTriangle size={18}/>} onOpen={openNoResultDemandModal}/>
           </section>
+          <DemandStockTable rows={demandStockRows.slice(0, 30)}/>
           <section className="columns three-columns">
             <Rank title="Top buscas" rows={searchRank} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
             <Rank title="Mais abertos" rows={productOpenRank} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
             <Rank title="Mais adicionados" rows={productAddedRank} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
           </section>
         </div>
+      ) : null}
+
+      {activeView === "catalog" ? (
+        <CatalogHealthView health={catalogHealth} demandRows={demandStockRows} onNavigate={setActiveView}/>
       ) : null}
 
       {activeView === "carts" ? (
@@ -2838,7 +3187,7 @@ function App() {
                 }) : <EmptyState message="Nenhum dado de teste ou não identificado foi encontrado."/>}
               </div>
               <div className="quality-confirm">
-                <label className="admin-pin">PIN administrativo <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="Informe se configurado" disabled={isCleaning}/></label>
+                <span className="secure-operation"><UserCheck size={16}/> Operação protegida pela sessão administrativa</span>
                 <button className="danger-button" type="button" onClick={handleSelectiveCleanup} disabled={isCleaning || !selectedCleanupKeys.length}>{isCleaning ? <RefreshCw className="spin" size={17}/> : <Trash2 size={17}/>} Excluir somente selecionados</button>
               </div>
               <p className="quality-note"><strong>Proteção:</strong> antes de excluir, o servidor cria uma aba de backup na planilha. Empresas reais são recusadas mesmo que sejam enviadas por engano.</p>
@@ -2890,8 +3239,13 @@ function App() {
           client={selectedClient}
           events={events.filter((event) => companyKey(event.companyName) === selectedClient.companyKey)}
           reservations={reservations.filter((item) => companyKey(item.company) === selectedClient.companyKey)}
+          tasks={crmTasks.map(normalizeCrmTask).filter((item) => item.companyKey === selectedClient.companyKey)}
+          activities={crmActivities.map(normalizeCrmActivity).filter((item) => item.companyKey === selectedClient.companyKey)}
           onClose={() => setSelectedClient(null)}
           onSave={saveClientProfile}
+          onSaveTask={saveCrmTask}
+          onCompleteTask={completeCrmTask}
+          onOutcome={recordClientOutcome}
           isSaving={isSavingCrm}
         />
       ) : null}
@@ -2899,231 +3253,6 @@ function App() {
     </main>
   );
 
-  return (
-    <main className="app">
-      <button className="logout-button" type="button" onClick={handleLogout} title="Encerrar sessão">
-        Sair
-      </button>
-      <ExecutiveHeader
-        title="Z Connect Intelligence"
-        subtitle="Painel comercial e comportamento de compra"
-        description="Leitura objetiva dos eventos do catálogo por empresa, busca, produto, consultor e cotação."
-        status={status}
-        lastUpdatedLabel={lastUpdatedLabel}
-        isLoading={isLoading}
-        isResetting={isResetting}
-        onRefresh={() => load()}
-        onExportExecutive={exportExecutiveReport}
-        onExportRaw={exportRawCsv}
-        period={period}
-        onPeriodChange={setPeriod}
-        consultant={consultant}
-        onConsultantChange={setConsultant}
-        consultants={consultants}
-        company={company}
-        onCompanyChange={setCompany}
-        companies={companies}
-        icons={{
-          refresh: <RefreshCw className={isLoading ? "spin" : undefined} size={17}/>,
-          download: <Download size={17}/>,
-          calendar: <CalendarDays size={15}/>,
-          filter: <Filter size={15}/>,
-          company: <Building2 size={15}/>
-        }}
-      />
-
-      {!filtered.length ? <div className="empty-state">{EMPTY_PERIOD_MESSAGE}</div> : null}
-
-      <SectionTitle title="Visão geral" subtitle="Resumo do período filtrado" />
-      <StatGrid
-        items={[
-          { icon: <Users/>, label: "Acessos", value: kpis.pageViews, onOpen: () => openEventModal("Acessos", byType.pageViews) },
-          { icon: <Search/>, label: "Buscas", value: kpis.searches, onOpen: () => openSearchModal("Buscas", byType.searches) },
-          { icon: <AlertTriangle/>, label: "Sem resultado", value: kpis.noResults, onOpen: () => openSearchModal("Buscas sem resultado", byType.noResults) },
-          { icon: <Eye/>, label: "Produtos abertos", value: kpis.productOpen, onOpen: () => openEventModal("Produtos abertos", byType.productOpen) },
-          { icon: <ShoppingCart/>, label: "Adicionados", value: kpis.added, onOpen: () => openEventModal("Produtos adicionados", byType.added) },
-          { icon: <XCircle/>, label: "Removidos", value: kpis.removed, onOpen: () => openEventModal("Produtos removidos", byType.removed) },
-          { icon: <Trash2/>, label: "Carrinhos limpos", value: kpis.cleared, onOpen: () => openEventModal("Carrinhos limpos", byType.cleared) },
-          { icon: <Send/>, label: "Cotações WhatsApp", value: kpis.quotes, onOpen: () => openQuoteModal(), emphasis: true }
-        ]}
-      />
-
-      <SectionTitle title="Funil" subtitle="Do acesso até a cotação" />
-      <section className="main-grid funnel-grid">
-        <article className="panel">
-          <div className="panel-head">
-            <h2><TrendingUp size={18}/> Funil</h2>
-            <span>Acesso até cotação</span>
-          </div>
-          <div className="heat funnel-compact">
-            {funnel.map(([label, value]) => {
-              const max = Math.max(1, funnel[0][1]);
-              return <div key={label} className="bar-row"><span>{label}</span><div><i style={{width:`${Math.max(4, Math.min(100, (value / max) * 100))}%`}}/></div><b>{value}</b></div>;
-            })}
-          </div>
-        </article>
-        <ValueCard title="Valor cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp no filtro atual`} icon={<Send/>} onOpen={() => openQuoteModal("Valor cotado")}/>
-        <ValueCard title="Conversão geral" value={quoteConversionRate} sub="Cotações divididas por produtos abertos" icon={<TrendingUp/>} onOpen={() => openQuoteModal("Conversão geral")}/>
-      </section>
-
-      <SectionTitle title="Empresas" subtitle="Quem mais movimenta o catálogo" />
-      <section className="columns">
-        <Rank title="Clientes mais ativos" rows={companyActiveRank} empty={EMPTY_LIST_MESSAGE} onOpen={openCompanyModal}/>
-        <Rank title="Clientes que mais pesquisaram" rows={companySearchRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
-        <Rank title="Clientes que mais enviaram cotações" rows={companyQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openQuoteModal("Cotações por empresa")}/>
-        <ValueCard title="Valor total cotado" value={money(kpis.quoteTotal)} sub={`${kpis.quotes} cotações WhatsApp`} icon={<Send/>} onOpen={() => openQuoteModal("Valor total cotado")}/>
-      </section>
-
-      <SectionTitle title="Insights do Dia" subtitle="Resumo executivo automático baseado nos dados do período selecionado" />
-      <InsightStrip insights={commercialInsights} />
-      <section className="commercial-grid">
-        <MetricTable
-          title="Ranking de empresas"
-          subtitle="Score = acesso×1 + busca×2 + produto×3 + carrinho×5 + cotação×15"
-          rows={companyActivity.filter((row) => !isAnonymousCompany(row.company)).slice(0, 20)}
-          columns={COMPANY_COMMERCIAL_COLUMNS.slice(1, 7)}
-          empty={EMPTY_LIST_MESSAGE}
-          icon={<Building2 size={18}/>}
-          onOpen={openCompanyModal}
-        />
-        <MetricTable
-          title="Empresas adormecidas"
-          subtitle="Queda dos últimos 30 dias contra os 30 dias anteriores"
-          rows={dormantCompanies}
-          columns={DORMANT_COMPANY_COLUMNS.slice(1, 6)}
-          empty="Monitoramento iniciado. Histórico mínimo de 30 dias necessário para identificar queda de atividade comercial."
-          icon={<AlertTriangle size={18}/>}
-          onOpen={openDormantCompanyModal}
-        />
-        <MetricTable
-          title="Ranking de consultores"
-          subtitle="Performance por consultor/link no filtro atual"
-          rows={consultantActivity.slice(0, 20)}
-          columns={CONSULTANT_COMMERCIAL_COLUMNS.slice(1, 7)}
-          empty={EMPTY_LIST_MESSAGE}
-          icon={<UserCheck size={18}/>}
-          onOpen={openConsultantModal}
-        />
-      </section>
-
-      <SectionTitle title="Buscas" subtitle="Demanda declarada e oportunidades sem resultado" />
-      <section className="columns">
-        <Rank title="Top buscas" rows={searchRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Top buscas", allSearchEvents)}/>
-        <Rank title="Buscas sem resultado" rows={noResultRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas sem resultado", byType.noResults)}/>
-        <Rank title="Buscas por empresa" rows={searchByCompanyRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas por empresa", allSearchEvents)}/>
-        <RecentEvents events={sortEventsDesc(allSearchEvents).slice(0, 10)} empty={EMPTY_LIST_MESSAGE} onOpen={() => openSearchModal("Buscas recentes", allSearchEvents)} />
-      </section>
-
-      <SectionTitle title="Inteligência comercial P1.1" subtitle="Ranking de demanda, cotação e oportunidades de compra" />
-      <section className="commercial-grid">
-        <MetricTable
-          title="Produtos mais quentes"
-          subtitle="Score = aberturas + carrinhos×3 + cotações×10"
-          rows={hotProducts}
-          columns={HOT_PRODUCT_COLUMNS.slice(1, 6)}
-          empty={EMPTY_LIST_MESSAGE}
-          icon={<Flame size={18}/>}
-          onOpen={openHotProductsModal}
-        />
-        <MetricTable
-          title="Produtos mais cotados"
-          subtitle="Itens com maior sinal comercial via WhatsApp"
-          rows={quotedProducts}
-          columns={QUOTED_PRODUCT_COLUMNS.slice(1, 4)}
-          empty={EMPTY_LIST_MESSAGE}
-          icon={<Send size={18}/>}
-          onOpen={openQuotedProductsModal}
-        />
-        <MetricTable
-          title="Demandas sem resultado"
-          subtitle="Buscas que viraram oportunidade de estoque/cadastro"
-          rows={noResultDemand.slice(0, 20)}
-          columns={NO_RESULT_DEMAND_COLUMNS.slice(1, 4)}
-          empty={EMPTY_LIST_MESSAGE}
-          icon={<AlertTriangle size={18}/>}
-          onOpen={openNoResultDemandModal}
-        />
-      </section>
-
-      <SectionTitle title="Produtos" subtitle="Interesse, carrinho e itens cotados" />
-      <section className="columns">
-        <Rank title="Produtos mais abertos" rows={productOpenRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais abertos", byType.productOpen)}/>
-        <Rank title="Produtos mais adicionados" rows={productAddedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais adicionados", byType.added)}/>
-        <Rank title="Produtos mais removidos" rows={productRemovedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos removidos", byType.removed)}/>
-        <Rank title="Produtos mais cotados" rows={productQuotedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos mais cotados", byType.quotes, { expandQuoteProducts: true })}/>
-      </section>
-
-      <SectionTitle title="Consultores" subtitle="Origem comercial das interações" />
-      <section className="columns">
-        <ValueCard title="Consultores" value={consultantActivity.length} sub="Ativos no filtro atual" icon={<UserCheck/>} onOpen={openConsultantModal}/>
-        <Rank title="Acessos por consultor" rows={consultantAccessRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
-        <Rank title="Buscas por consultor" rows={consultantSearchRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
-        <Rank title="Cotações por consultor" rows={consultantQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={openConsultantModal}/>
-        <Rank title="Valor total cotado" rows={consultantValueRank} empty={EMPTY_LIST_MESSAGE} formatValue={money} onOpen={openConsultantModal}/>
-      </section>
-
-      <SectionTitle title="Cotações" subtitle="Sinais mais próximos de cotação" />
-      <section className="columns">
-        <ValueCard title="Cotações WhatsApp" value={kpis.quotes} sub={`Total estimado ${money(kpis.quoteTotal)}`} icon={<Send/>} onOpen={() => openQuoteModal()}/>
-        <Rank title="Empresas que cotaram" rows={companyQuoteRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openQuoteModal("Empresas que cotaram")}/>
-        <Rank title="Produtos cotados" rows={productQuotedRank} empty={EMPTY_LIST_MESSAGE} onOpen={() => openEventModal("Produtos cotados", byType.quotes, { expandQuoteProducts: true })}/>
-        <RecentEvents
-          title="Cotações recentes"
-          empty={EMPTY_LIST_MESSAGE}
-          events={sortEventsDesc(byType.quotes).slice(0, 10)}
-          detailFn={(event) => `${quoteItemsCount(event)} itens - ${money(event.cartTotal || event.total)}`}
-          onOpen={() => openQuoteModal("Cotações recentes")}
-        />
-      </section>
-
-      <SectionTitle title="Administração" subtitle="Rotina de limpeza para testes" />
-      <section className="admin-grid">
-        <article className="panel admin-panel">
-          <div className="panel-head">
-            <h2><Eraser size={18}/> Reset de dados</h2>
-            <span>Ambiente controlado</span>
-          </div>
-          <p className="admin-copy">Use apenas para limpar eventos de teste antes de iniciar uma nova rodada.</p>
-          {ADMIN_PIN ? (
-            <label className="admin-pin">PIN
-              <input value={adminPin} onChange={(event) => setAdminPin(event.target.value)} type="password" placeholder="PIN admin" disabled={isResetting} />
-            </label>
-          ) : null}
-          <button className="danger-button" type="button" onClick={handleReset} disabled={isResetting} aria-busy={isResetting}>
-            {isResetting ? <RefreshCw className="spin" size={17}/> : <Eraser size={17}/>}
-            {isResetting ? "Limpando..." : "Limpar dados de teste"}
-          </button>
-          {resetStatus ? <small className="admin-status">{resetStatus}</small> : null}
-          {!ADMIN_PIN ? <small className="admin-status">Sem PIN configurado no painel: reset liberado temporariamente para apresentação.</small> : null}
-        </article>
-      </section>
-
-      <section className="panel">
-        <div className="panel-head">
-          <h2><UserCheck size={18}/> Eventos recentes</h2>
-          <span>{filtered.length} eventos filtrados</span>
-        </div>
-        <div className="event-table">
-          <div className="event-head">
-            <span>Hora</span><span>Evento</span><span>Empresa</span><span>Consultor</span><span>Detalhe</span>
-          </div>
-          {sortEventsDesc(filtered).slice(0, 20).map((event) => (
-            <div className="event-row" key={`${event.id}-${event.timestamp}`}>
-              <span>{dateTime(event.timestamp)}</span>
-              <strong>{EVENT_LABELS[event.event] || event.event}</strong>
-              <span>{event.companyName}</span>
-              <span>{event.consultant.toUpperCase()}</span>
-              <span title={eventDetail(event)}>{eventDetail(event)}</span>
-            </div>
-          ))}
-          {!filtered.length ? <p className="empty">{EMPTY_LIST_MESSAGE}</p> : null}
-        </div>
-      </section>
-
-      {activeModal ? <HistoryModal key={activeModal.id} modal={activeModal} onClose={() => setActiveModal(null)} /> : null}
-      {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
-    </main>
-  );
 }
 
 function SectionTitle({ title, subtitle }) {
@@ -3154,6 +3283,130 @@ function Rank({ title, rows = [], empty = EMPTY_LIST_MESSAGE, formatValue = (val
         )) : <EmptyState message={empty} />}
       </div>
     </article>
+  );
+}
+
+function ExecutiveBrief({ urgent, carts, due, alerts }) {
+  const message = urgent
+    ? `Hoje existem ${urgent} ação(ões) que merecem atendimento imediato.`
+    : carts
+      ? `${carts} cliente(s) estão montando carrinho agora; acompanhe antes da reserva expirar.`
+      : due
+        ? `A prioridade de hoje é concluir ${due} retorno(s) comercial(is).`
+        : "A operação está sob controle. Use o momento para reativar clientes e revisar oportunidades.";
+  return (
+    <section className="executive-brief">
+      <div><span>Resumo de hoje</span><h2>{message}</h2><p>{alerts.length ? `${alerts.length} alerta(s) operacional(is) monitorado(s).` : "Nenhuma anomalia crítica detectada."}</p></div>
+      <i className={urgent ? "urgent" : "ok"}><TrendingUp size={26}/></i>
+    </section>
+  );
+}
+
+function AlertCenter({ alerts = [], onNavigate }) {
+  return (
+    <article className="panel alert-center">
+      <div className="panel-head"><div><h2><AlertTriangle size={18}/> Alertas que pedem decisão</h2><p>Somente sinais que podem virar venda, atraso ou ruptura.</p></div><span>{alerts.length}</span></div>
+      <div className="alert-list">
+        {alerts.length ? alerts.slice(0, 6).map((alert, index) => (
+          <button type="button" key={`${alert.title}-${index}`} className={`alert-row alert-${alert.level}`} onClick={() => onNavigate(alert.view)}>
+            <i/><span><strong>{alert.title}</strong><small>{alert.detail}</small></span><b>Ver →</b>
+          </button>
+        )) : <EmptyState message="Nenhum alerta operacional no momento."/>}
+      </div>
+    </article>
+  );
+}
+
+function GoalPanel({ target = 0, result = 0, won = 0, lost = 0, onSave }) {
+  const [value, setValue] = useState(target ? String(target) : "");
+  useEffect(() => setValue(target ? String(target) : ""), [target]);
+  const progress = target ? Math.min(100, Math.round((result / target) * 100)) : 0;
+  return (
+    <article className="panel goal-panel">
+      <div className="panel-head"><div><h2><TrendingUp size={18}/> Resultado do mês</h2><p>Fechamentos registrados no CRM, sem alterar preços.</p></div><span>{progress}%</span></div>
+      <strong className="goal-result">{money(result)}</strong>
+      <div className="goal-track"><i style={{ width: `${progress}%` }}/></div>
+      <div className="goal-meta"><span><b>{won}</b> ganhos</span><span><b>{lost}</b> perdas</span><span>Meta: <b>{target ? money(target) : "não definida"}</b></span></div>
+      <form className="goal-form" onSubmit={(event) => { event.preventDefault(); onSave(value); }}>
+        <label>Meta mensal <input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Ex.: 100000"/></label>
+        <button type="submit">Salvar meta</button>
+      </form>
+    </article>
+  );
+}
+
+function PipelineBoard({ rows = [], onOpen, onMove }) {
+  const [moving, setMoving] = useState("");
+  async function move(client, status) {
+    if (client.statusKey === status) return;
+    setMoving(client.companyKey);
+    try { await onMove(client, status); } finally { setMoving(""); }
+  }
+  return (
+    <section className="pipeline-board">
+      {PIPELINE_STAGES.map((stage) => {
+        const stageRows = rows.filter((row) => row.statusKey === stage.key);
+        const stageValue = stageRows.reduce((sum, row) => sum + safeNumber(row.expectedValue || row.quoteTotalNumber), 0);
+        return (
+          <article className={`pipeline-column stage-${stage.key}`} key={stage.key} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
+            event.preventDefault();
+            const key = event.dataTransfer.getData("text/plain");
+            const client = rows.find((row) => row.companyKey === key);
+            if (client) move(client, stage.key);
+          }}>
+            <header><span>{stage.label}</span><b>{stageRows.length}</b><small>{money(stageValue)}</small></header>
+            <div className="pipeline-cards">
+              {stageRows.map((client) => (
+                <button type="button" draggable key={client.companyKey} className="pipeline-card" onDragStart={(event) => event.dataTransfer.setData("text/plain", client.companyKey)} onClick={() => onOpen(client)} disabled={moving === client.companyKey}>
+                  <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.activeCartQty ? `${client.activeCartQty} un. no carrinho` : client.topProducts[0] || "Sem produto recente"}</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
+                </button>
+              ))}
+              {!stageRows.length ? <p className="pipeline-empty">Solte um cliente aqui</p> : null}
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function DemandStockTable({ rows = [] }) {
+  return (
+    <article className="panel demand-stock-panel">
+      <div className="panel-head"><div><h2><Flame size={18}/> Demanda x estoque</h2><p>Combina aberturas, carrinhos, cotações, estoque e reservas ativas.</p></div><span>{rows.length} produto(s)</span></div>
+      <div className="demand-stock-table">
+        <div className="demand-stock-head"><span>Produto</span><span>Demanda</span><span>Estoque</span><span>Reservado</span><span>Disponível</span><span>Sinal</span></div>
+        {rows.length ? rows.map((row) => <div key={row.id} className="demand-stock-row"><span><strong>{row.productCode}</strong><small>{row.productName}</small></span><b>{row.demandScore}</b><b>{row.stockQty}</b><b>{row.reservedQty}</b><b>{row.availableQty}</b><span className={`stock-signal ${row.signal.includes("prioritária") || row.signal.includes("sem disponibilidade") ? "critical" : row.signal.includes("pressão") ? "warning" : "normal"}`}>{row.signal}</span></div>) : <EmptyState message="Aguardando sinais de produto e snapshot do catálogo."/>}
+      </div>
+    </article>
+  );
+}
+
+function CatalogHealthView({ health = {}, demandRows = [] }) {
+  const latest = health.latest;
+  const snapshots = health.snapshots || [];
+  const age = latest ? Date.now() - new Date(latest.createdAt).getTime() : Infinity;
+  const freshness = !latest ? "Aguardando integração" : latest.status === "error" ? "Falha" : age > 36 * 60 * 60 * 1000 ? "Atrasado" : "Atualizado";
+  return (
+    <div className="view-stack catalog-view">
+      <StatGrid items={[
+        { icon: <RefreshCw/>, label: "Situação da atualização", value: freshness, emphasis: freshness === "Atualizado" },
+        { icon: <Building2/>, label: "Produtos monitorados", value: safeNumber(latest?.productCount) },
+        { icon: <ShoppingCart/>, label: "Com estoque", value: safeNumber(latest?.inStockCount) },
+        { icon: <AlertTriangle/>, label: "Sem imagem", value: safeNumber(latest?.missingImageCount) }
+      ]}/>
+      <section className="catalog-grid">
+        <article className="panel catalog-summary">
+          <div className="panel-head"><div><h2><RefreshCw size={18}/> Atualização diária</h2><p>Diagnóstico do processo que alimenta o catálogo.</p></div><span className={`health-badge health-${freshness.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{freshness}</span></div>
+          {latest ? <div className="catalog-facts"><div><span>Última execução</span><strong>{dateTime(latest.createdAt)}</strong></div><div><span>Duração</span><strong>{safeNumber(latest.durationMs)} ms</strong></div><div><span>Novos</span><strong>{safeNumber(latest.newCount)}</strong></div><div><span>Removidos</span><strong>{safeNumber(latest.removedCount)}</strong></div><div><span>Estoques alterados</span><strong>{safeNumber(latest.changedStockCount)}</strong></div><div><span>Sem estoque</span><strong>{safeNumber(latest.outOfStockCount)}</strong></div></div> : <EmptyState message="O painel está pronto. Falta enviar o primeiro snapshot pelo processo diário do catálogo."/>}
+        </article>
+        <article className="panel snapshot-history">
+          <div className="panel-head"><div><h2><CalendarDays size={18}/> Histórico</h2><p>Últimas execuções recebidas.</p></div><span>{snapshots.length}</span></div>
+          <div>{snapshots.slice(0, 8).map((item) => <div className="snapshot-row" key={item.snapshotId}><i className={item.status === "error" ? "error" : "success"}/><span><strong>{dateTime(item.createdAt)}</strong><small>{item.source || "Atualização diária"}</small></span><b>{safeNumber(item.productCount)} produtos</b></div>)}{!snapshots.length ? <p className="empty">Sem execuções registradas.</p> : null}</div>
+        </article>
+      </section>
+      <DemandStockTable rows={demandRows.slice(0, 50)}/>
+    </div>
   );
 }
 
@@ -3214,7 +3467,7 @@ function ClientCrmTable({ rows = [], onOpen }) {
         <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, responsável ou tag"/></label>
         <label><Filter size={14}/> Etapa
           <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="all">Todas</option><option value="new">Novo</option><option value="contact">Contato</option><option value="negotiation">Negociação</option><option value="active">Ativo</option><option value="cold">Frio</option><option value="lost">Perdido</option>
+            <option value="all">Todas</option>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="active">Cliente ativo</option><option value="cold">Frio</option>
           </select>
         </label>
       </div>
@@ -3237,17 +3490,24 @@ function ClientCrmTable({ rows = [], onOpen }) {
   );
 }
 
-function ClientProfileModal({ client, events = [], reservations = [], onClose, onSave, isSaving }) {
+function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
   const initialContactDate = crmContactDate(client.nextContactAt);
   const initialDate = initialContactDate ? localDateInput(initialContactDate) : "";
   const [form, setForm] = useState({
     companyName: client.company,
+    phone: client.phone || "",
     status: client.statusKey || "new",
     owner: client.owner || "",
     nextContactAt: initialDate,
     tags: client.tags || "",
-    notes: client.notes || ""
+    notes: client.notes || "",
+    expectedValue: client.expectedValue || "",
+    lastOutcome: client.lastOutcome || "",
+    lostReason: client.lostReason || ""
   });
+  const [taskForm, setTaskForm] = useState({ title: "Retornar contato", dueAt: localDateInput(new Date()), priority: "normal" });
+  const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
+  const [busyAction, setBusyAction] = useState("");
   const [error, setError] = useState("");
   const recentEvents = sortEventsDesc(events).slice(0, 12);
   const products = [...new Set([...client.topProducts, ...reservations.map((item) => item.product).filter(Boolean)])].slice(0, 8);
@@ -3270,11 +3530,28 @@ function ClientProfileModal({ client, events = [], reservations = [], onClose, o
     }
   }
 
+  async function handleTask(event) {
+    event.preventDefault();
+    setBusyAction("task");
+    try {
+      await onSaveTask({ ...taskForm, companyKey: client.companyKey, companyName: client.company, owner: form.owner || client.owner });
+      setTaskForm((current) => ({ ...current, title: "Retornar contato" }));
+    } finally { setBusyAction(""); }
+  }
+
+  async function handleOutcome(event) {
+    event.preventDefault();
+    setBusyAction("outcome");
+    try { await onOutcome({ ...client, ...form }, outcome); } finally { setBusyAction(""); }
+  }
+
+  const whatsappDigits = String(form.phone || "").replace(/\D/g, "");
+
   return (
     <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
       <section className="client-modal" role="dialog" aria-modal="true" aria-labelledby="client-modal-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="client-modal-header">
-          <div><span className="eyebrow">Ficha comercial</span><h2 id="client-modal-title">{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div>
+          <div><span className="eyebrow">Cliente 360</span><h2 id="client-modal-title">{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div>
           <button type="button" className="modal-close" onClick={onClose} aria-label="Fechar"><X size={18}/></button>
         </header>
         <div className="client-summary-grid">
@@ -3282,20 +3559,28 @@ function ClientProfileModal({ client, events = [], reservations = [], onClose, o
         </div>
         <div className="client-modal-body">
           <form className="client-form" onSubmit={handleSubmit}>
-            <h3>Próximo passo</h3>
+            <h3>Dados comerciais</h3>
             <label>Etapa
-              <select value={form.status} onChange={(event) => update("status", event.target.value)}><option value="new">Novo</option><option value="contact">Contato</option><option value="negotiation">Negociação</option><option value="active">Ativo</option><option value="cold">Frio</option><option value="lost">Perdido</option></select>
+              <select value={form.status} onChange={(event) => update("status", event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select>
             </label>
+            <label>Telefone / WhatsApp <input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
             <label>Responsável <input value={form.owner} onChange={(event) => update("owner", event.target.value)} placeholder="Nome do responsável"/></label>
             <label>Próximo contato <input type="date" value={form.nextContactAt} onChange={(event) => update("nextContactAt", event.target.value)}/></label>
+            <label>Valor esperado <input inputMode="decimal" value={form.expectedValue} onChange={(event) => update("expectedValue", event.target.value)} placeholder="Ex.: 2500"/></label>
             <label>Tags <input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="ex.: funilaria, atacado, prioridade"/></label>
             <label className="notes-label">Anotações <textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Contexto da negociação, necessidade e combinado com o cliente."/></label>
             {error ? <p className="form-error">{error}</p> : null}
             <button type="submit" className="crm-save" disabled={isSaving}>{isSaving ? <RefreshCw className="spin" size={16}/> : <UserCheck size={16}/>} {isSaving ? "Salvando..." : "Salvar ficha"}</button>
+            {whatsappDigits ? <a className="whatsapp-link" href={`https://wa.me/${whatsappDigits}`} target="_blank" rel="noreferrer"><Send size={16}/> Abrir conversa no WhatsApp</a> : null}
           </form>
           <div className="client-history">
             <section><h3>Interesses principais</h3><div className="tag-list">{products.length ? products.map((product) => <span key={product}>{product}</span>) : <small>Nenhum produto identificado.</small>}</div></section>
-            <section><h3>Histórico recente</h3><div className="client-timeline">{recentEvents.length ? recentEvents.map((event) => <div key={`${event.id}-${event.timestamp}`}><i/><span><strong>{EVENT_LABELS[event.event] || event.event}</strong><small>{eventDetail(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>) : <EmptyState message="Sem eventos para este cliente no período."/>}</div></section>
+            <section className="client-tasks"><h3>Tarefas e retornos</h3>
+              <form className="task-form" onSubmit={handleTask}><input value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} required/><input type="date" value={taskForm.dueAt} onChange={(event) => setTaskForm((current) => ({ ...current, dueAt: event.target.value }))}/><select value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value }))}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select><button disabled={busyAction === "task"}>Adicionar</button></form>
+              <div className="task-list">{tasks.filter((task) => task.status === "open").map((task) => <div key={task.taskId}><span><strong>{task.title}</strong><small>{task.dueAt ? dateOnly(task.dueAt) : "Sem prazo"} · {task.owner || "Sem responsável"}</small></span><button type="button" onClick={() => onCompleteTask(task.taskId)}>Concluir</button></div>)}{!tasks.some((task) => task.status === "open") ? <small>Nenhuma tarefa aberta.</small> : null}</div>
+            </section>
+            <section className="outcome-card"><h3>Registrar resultado</h3><form onSubmit={handleOutcome}><select value={outcome.type} onChange={(event) => setOutcome((current) => ({ ...current, type: event.target.value }))}><option value="won">Pedido fechado</option><option value="lost">Oportunidade perdida</option></select><input inputMode="decimal" value={outcome.value} onChange={(event) => setOutcome((current) => ({ ...current, value: event.target.value }))} placeholder="Valor"/>{outcome.type === "lost" ? <select value={outcome.reason} onChange={(event) => setOutcome((current) => ({ ...current, reason: event.target.value }))} required><option value="">Motivo da perda</option>{LOST_REASONS.map((reason) => <option key={reason} value={reason}>{reason}</option>)}</select> : null}<input value={outcome.note} onChange={(event) => setOutcome((current) => ({ ...current, note: event.target.value }))} placeholder="Observação"/><button disabled={busyAction === "outcome"}>{busyAction === "outcome" ? "Registrando..." : "Registrar"}</button></form></section>
+            <section><h3>Linha do tempo</h3><div className="client-timeline">{activities.slice(0, 8).map((activity) => <div key={activity.activityId}><i className={`activity-${activity.type}`}/><span><strong>{activity.type === "won" ? "Pedido fechado" : activity.type === "lost" ? "Perda registrada" : activity.type === "stage_change" ? "Etapa alterada" : "Atividade CRM"}</strong><small>{activity.note || activity.reason || `${crmStatusLabel(activity.stageFrom)} → ${crmStatusLabel(activity.stageTo)}`}</small></span><time>{activity.createdAtLabel}</time></div>)}{recentEvents.map((event) => <div key={`${event.id}-${event.timestamp}`}><i/><span><strong>{EVENT_LABELS[event.event] || event.event}</strong><small>{eventDetail(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>)}{!activities.length && !recentEvents.length ? <EmptyState message="Sem eventos para este cliente."/> : null}</div></section>
           </div>
         </div>
       </section>

@@ -1,63 +1,93 @@
-# Z Connect Analytics CRM 10
+# Z Connect Analytics CRM 11
 
-Painel comercial do catálogo com oportunidades priorizadas, carteira de clientes e manutenção segura dos dados. Esta versão não altera preços, descontos nem a política comercial do catálogo.
+Painel de inteligência comercial com login real no servidor, fila diária, funil Kanban, Cliente 360, tarefas, metas, resultados, reservas e monitor do catálogo. Nenhuma regra de preço ou desconto foi alterada.
 
-## O que foi adicionado
+## O que entrou nesta versão
 
-- Períodos rápidos e intervalo personalizado por data.
-- Filtros por consultor, empresa, evento, produto, código e termo buscado.
-- Fila de oportunidades por urgência: excedente de estoque, carrinho ativo, carrinho sem cotação, busca sem resultado e reativação.
-- Ficha CRM por cliente com etapa, responsável, próximo contato, tags, anotações, interesses e histórico.
-- Qualidade de dados com prévia dos registros de teste/não identificados.
-- Backup CSV local e backup automático em uma nova aba da planilha antes da limpeza.
-- Bloqueio no servidor contra exclusão seletiva de empresas reais.
-- Detecção e unificação assistida de nomes duplicados, também com backup.
+- Login server-side: senha não vai mais para o JavaScript público; sessão em cookie `HttpOnly`, `Secure` e `SameSite=Strict`.
+- APIs administrativas protegidas por sessão na Vercel e token privado entre Vercel e Apps Script.
+- Central **Ações agora**: retornos atrasados, carrinhos, excedentes, cotações e sinais de compra ordenados por urgência.
+- Funil Kanban: novo, contato, cotação, negociação, aguardando, ganho e perdido.
+- Cliente 360: telefone/WhatsApp, responsável, valor esperado, tags, anotações, tarefas, produtos, reservas e linha do tempo.
+- Registro de vendas e perdas com valor e motivo; meta mensal e progresso executivo.
+- Demanda x estoque x reservas e alertas de reposição.
+- Monitor da atualização diária do catálogo, produtos sem imagem e variação de estoque.
+- Limpeza seletiva com backup; após limpar testes, os filtros voltam para **Todo o histórico / Todas** automaticamente.
 
-## Teste local
+## 1. Gerar os segredos
 
-1. Crie o arquivo `.env` usando as mesmas variáveis do projeto publicado.
-2. Execute:
+No terminal, dentro da pasta do projeto:
 
 ```bash
-npm install
-npm run dev
+node scripts/generate-auth-secrets.mjs "SUA-SENHA-FORTE"
 ```
 
-3. Abra o endereço exibido pelo Vite, normalmente `http://localhost:5173`.
-4. Teste os filtros, abra uma ficha CRM e salve uma anotação.
+Copie os quatro valores exibidos. A senha digitada não é gravada no projeto.
 
-## Atualização obrigatória do Google Apps Script
+## 2. Configurar o Google Apps Script
 
-1. Abra a planilha do Analytics e acesse **Extensões > Apps Script**.
-2. Substitua o código pela versão de `GOOGLE_APPS_SCRIPT_V3_CLIENTES.js` deste pacote.
-3. Em **Implantar > Gerenciar implantações**, edite a implantação atual.
-4. Selecione **Nova versão** e conclua a implantação, mantendo o mesmo URL.
-5. Confirme que `VITE_ANALYTICS_API_URL` na Vercel aponta para esse URL.
+1. Abra a planilha do Analytics em **Extensões > Apps Script**.
+2. Substitua o código pelo arquivo `GOOGLE_APPS_SCRIPT_V3_CLIENTES.js` deste pacote.
+3. Abra **Configurações do projeto > Propriedades do script**.
+4. Crie `ANALYTICS_ADMIN_TOKEN` com exatamente o token gerado no passo 1.
+5. Crie `CATALOG_SYNC_TOKEN` com o token de catálogo gerado no passo 1.
+6. Vá a **Implantar > Gerenciar implantações**, edite a implantação, escolha **Nova versão** e publique mantendo o mesmo URL `/exec`.
 
-Opcionalmente configure `ANALYTICS_ADMIN_PIN` nas propriedades do Apps Script. Use o mesmo valor em `VITE_ANALYTICS_ADMIN_PIN` na Vercel. Sem PIN, a limpeza continua disponível para quem tiver acesso ao painel.
+As abas `CRM_CLIENTS`, `CRM_TASKS`, `CRM_ACTIVITIES`, `CRM_SETTINGS`, `CATALOG_SNAPSHOTS` e `CATALOG_PRODUCTS` são criadas automaticamente quando usadas. Os dados anteriores continuam preservados.
 
-## Publicação na Vercel
+## 3. Configurar a Vercel
 
-Se o projeto já está conectado ao GitHub:
+Em **Project > Settings > Environment Variables**, configure para `Production`, `Preview` e `Development`:
+
+- `ANALYTICS_LOGIN_USER`: normalmente `admin`.
+- `ANALYTICS_LOGIN_PASSWORD_HASH`: valor gerado pelo script.
+- `ANALYTICS_SESSION_SECRET`: valor gerado pelo script.
+- `ANALYTICS_API_URL`: URL `/exec` da implantação do Apps Script.
+- `ANALYTICS_ADMIN_TOKEN`: o mesmo configurado nas propriedades do Apps Script.
+- `CATALOG_SYNC_TOKEN`: o mesmo token definido para a integração do catálogo.
+
+Remova as antigas `VITE_ANALYTICS_LOGIN_*`, `VITE_ANALYTICS_ADMIN_PIN` e credenciais públicas. Variáveis com prefixo `VITE_` são expostas ao navegador e não devem conter segredos.
+
+## 4. Testar localmente
+
+Copie `.env.example` para `.env.local`, preencha somente na sua máquina e execute:
 
 ```bash
 npm install
+npm test
 npm run build
+npx vercel dev
+```
+
+Abra o endereço informado pelo `vercel dev`, faça login e valide:
+
+1. Visão geral e **Ações agora**.
+2. Arrastar cliente no **Funil**.
+3. Abrir Cliente 360, salvar telefone, criar e concluir tarefa.
+4. Registrar um ganho/perda de teste e conferir o resultado mensal.
+5. Carrinhos e modal de reservas.
+6. Qualidade: prévia e limpeza seletiva.
+
+O `npm run dev` sozinho serve apenas a interface Vite; para testar login e rotas `/api`, use `npx vercel dev`.
+
+## 5. Publicar
+
+Se o projeto está ligado ao GitHub:
+
+```bash
 git add .
-git commit -m "Analytics CRM 10"
+git commit -m "Analytics CRM 11"
 git push origin main
 ```
 
-Se publica manualmente, envie esta pasta para o mesmo projeto atual do Analytics. Não é necessário republicar o catálogo.
+Ou envie esta pasta ao mesmo projeto da Vercel. Após o deploy, use `Ctrl + F5`, entre novamente e confirme que a área **Qualidade** informa “operação protegida pela sessão administrativa”.
 
-Depois do deploy, atualize com `Ctrl + F5` e valide:
+## Ordem segura de atualização
 
-- período personalizado;
-- abertura e salvamento da ficha CRM;
-- área Qualidade e sua prévia;
-- carrinhos e modal de reservas;
-- exportação do relatório executivo.
+1. Configure as variáveis na Vercel.
+2. Publique o frontend CRM 11.
+3. Configure as propriedades e publique o Apps Script CRM 11.
+4. Se o URL do Apps Script mudou, atualize `ANALYTICS_API_URL` e faça novo deploy na Vercel.
+5. Conecte o snapshot do catálogo seguindo `docs/INTEGRACAO-CATALOGO-CRM11.md`.
 
-## Limpeza dos testes antigos
-
-Abra **Qualidade**, confira a lista, gere o **Backup CSV**, selecione apenas os nomes desejados e clique em **Excluir somente selecionados**. O servidor cria uma aba `BACKUP_LIMPEZA_...` antes da remoção. O comando antigo de apagar todo o histórico não aparece mais na interface.
+O catálogo atual continua funcionando durante os passos 1 a 4. A integração de snapshot apenas envia código, descrição, marca, estoque e presença de imagem; não recebe nem altera preço.
