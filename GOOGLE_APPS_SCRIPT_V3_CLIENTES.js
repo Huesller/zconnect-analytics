@@ -85,6 +85,7 @@ const RESERVATION_HEADERS = [
 const CRM_CLIENT_HEADERS = [
   "companyKey",
   "companyName",
+  "customerCode",
   "contactName",
   "phone",
   "email",
@@ -156,6 +157,8 @@ const CATALOG_PRODUCT_HEADERS = [
   "productName",
   "brand",
   "stockQty",
+  "previousStockQty",
+  "restockedAt",
   "hasImage",
   "updatedAt"
 ];
@@ -1073,6 +1076,7 @@ function upsertCrmClient_(data) {
 
   const allowedStatuses = ["new", "contact", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
+  const customerCode = String(data.customerCode || "").trim().replace(/\s+/g, " ").slice(0, 80);
   const contactName = String(data.contactName || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const phone = String(data.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
   const email = String(data.email || "").trim().toLowerCase().slice(0, 180);
@@ -1119,6 +1123,7 @@ function upsertCrmClient_(data) {
     const record = {
       companyKey: companyKey,
       companyName: companyName,
+      customerCode: customerCode,
       contactName: contactName,
       phone: phone,
       email: email,
@@ -1348,11 +1353,75 @@ function normalizeCatalogProducts_(value) {
       productName: String(item.productName || item.name || item.descricao || "").trim().replace(/\s+/g, " ").slice(0, 240),
       brand: String(item.brand || item.marca || "").trim().replace(/\s+/g, " ").slice(0, 80),
       stockQty: Math.max(0, number_(item.stockQty !== undefined ? item.stockQty : (item.stock !== undefined ? item.stock : item.estoque))),
+      previousStockQty: 0,
+      restockedAt: "",
       hasImage: Boolean(item.hasImage !== undefined ? item.hasImage : (item.image || item.imagem || item.imageUrl)),
       updatedAt: new Date()
     };
   });
   return Object.keys(byCode).map(function(code) { return byCode[code]; });
+}
+
+function createRestockTasks_(restockedProducts) {
+  if (!restockedProducts.length) return { tasks: 0, clients: 0 };
+  const productMap = {};
+  restockedProducts.forEach(function(product) { productMap[String(product.productCode)] = product; });
+  const eventSheet = getEventsSheet_();
+  const eventValues = eventSheet.getDataRange().getValues();
+  const eventHeaders = eventValues[0].map(String);
+  const codeIndex = eventHeaders.indexOf("productCode");
+  const companyIndex = eventHeaders.indexOf("companyName");
+  const consultantIndex = eventHeaders.indexOf("consultant");
+  const eventIndex = eventHeaders.indexOf("event");
+  const interested = {};
+  eventValues.slice(1).forEach(function(row) {
+    const code = codeIndex >= 0 ? String(row[codeIndex] || "").trim() : "";
+    if (!productMap[code]) return;
+    const eventName = eventIndex >= 0 ? String(row[eventIndex] || "") : "";
+    if (["product_open", "add_to_cart", "whatsapp_quote", "search"].indexOf(eventName) < 0) return;
+    const companyName = companyIndex >= 0 ? String(row[companyIndex] || "").trim() : "";
+    const companyKey = normalizeCompanyKey_(companyName);
+    if (!companyKey || cleanupReason_(companyName)) return;
+    const key = code + "|" + companyKey;
+    interested[key] = {
+      companyKey: companyKey,
+      companyName: companyName,
+      owner: consultantIndex >= 0 ? normalizeConsultor_(row[consultantIndex]) : "",
+      product: productMap[code]
+    };
+  });
+
+  const taskSheet = getCrmTasksSheet_();
+  const taskHeaders = getHeaders_(taskSheet);
+  const existingTasks = readStructuredRows_(taskSheet, "task");
+  const existingKeys = {};
+  existingTasks.forEach(function(task) {
+    if (String(task.status || "") !== "open") return;
+    existingKeys[normalizeCompanyKey_(task.companyKey || task.companyName) + "|" + String(task.title || "")] = true;
+  });
+  const today = Utilities.formatDate(new Date(), Session.getScriptTimeZone() || "America/Sao_Paulo", "yyyy-MM-dd");
+  const rows = [];
+  let clients = 0;
+  Object.keys(interested).slice(0, 500).forEach(function(key) {
+    const item = interested[key];
+    const title = "Reposição disponível: " + item.product.productCode + " - " + item.product.productName;
+    const taskKey = item.companyKey + "|" + title;
+    if (existingKeys[taskKey]) return;
+    existingKeys[taskKey] = true;
+    clients++;
+    const task = {
+      taskId: uniqueId_("TASK"), companyKey: item.companyKey, companyName: item.companyName,
+      title: title.slice(0, 220), dueAt: today, owner: item.owner, priority: "high", status: "open",
+      createdAt: new Date(), completedAt: ""
+    };
+    rows.push(taskHeaders.map(function(header) { return task[header] !== undefined ? task[header] : ""; }));
+    appendCrmActivity_({
+      companyKey: item.companyKey, companyName: item.companyName, type: "stock_restored", owner: item.owner,
+      note: (item.product.productCode + " - " + item.product.productName + " voltou ao estoque com " + item.product.stockQty + " unidade(s).").slice(0, 1000)
+    });
+  });
+  if (rows.length) writeRowsInChunks_(taskSheet, taskSheet.getLastRow() + 1, rows);
+  return { tasks: rows.length, clients: clients };
 }
 
 function syncCatalogSnapshot_(data) {
@@ -1368,7 +1437,15 @@ function syncCatalogSnapshot_(data) {
     const previousMap = {};
     previous.forEach(function(item) { if (item.productCode) previousMap[String(item.productCode)] = item; });
     const currentMap = {};
-    products.forEach(function(item) { currentMap[item.productCode] = item; });
+    const restockedProducts = [];
+    products.forEach(function(item) {
+      const previousItem = previousMap[item.productCode] || {};
+      const previousStock = number_(previousItem.stockQty || 0);
+      item.previousStockQty = previousStock;
+      item.restockedAt = previousStock <= 0 && item.stockQty > 0 ? new Date() : (previousItem.restockedAt || "");
+      if (previousMap[item.productCode] && previousStock <= 0 && item.stockQty > 0) restockedProducts.push(item);
+      currentMap[item.productCode] = item;
+    });
     let newCount = 0;
     let changedStockCount = 0;
     products.forEach(function(item) {
@@ -1387,6 +1464,7 @@ function syncCatalogSnapshot_(data) {
 
     const inStockCount = products.filter(function(item) { return item.stockQty > 0; }).length;
     const missingImageCount = products.filter(function(item) { return !item.hasImage; }).length;
+    const restockResult = status === "success" ? createRestockTasks_(restockedProducts) : { tasks: 0, clients: 0 };
     const snapshot = {
       snapshotId: uniqueId_("SNAP"),
       createdAt: new Date(),
@@ -1405,7 +1483,7 @@ function syncCatalogSnapshot_(data) {
     const snapshotSheet = getCatalogSnapshotsSheet_();
     const snapshotHeaders = getHeaders_(snapshotSheet);
     snapshotSheet.appendRow(snapshotHeaders.map(function(header) { return snapshot[header] !== undefined ? snapshot[header] : ""; }));
-    return { ok: true, snapshot: snapshot };
+    return { ok: true, snapshot: snapshot, restockedProducts: restockedProducts.length, restockTasks: restockResult.tasks };
   } finally { lock.releaseLock(); }
 }
 
@@ -1833,5 +1911,5 @@ function doGet(e) {
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.0 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.1 + Reservas V1" });
 }

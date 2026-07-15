@@ -706,6 +706,16 @@ function cartFollowUpMessage(context = {}) {
   return lines.join("\n");
 }
 
+function stockRestockMessage(product, client = {}) {
+  const greetingName = String(client.contactName || client.company || "").trim();
+  return [
+    greetingName ? `Olá, ${greetingName}! Tudo bem?` : "Olá! Tudo bem?",
+    `A peça ${product.productCode} - ${product.productName} que vocês consultaram voltou ao estoque.`,
+    product.stockQty > 0 ? `Temos ${product.stockQty} unidade(s) disponível(is) neste momento.` : "A reposição está sendo acompanhada pela nossa equipe.",
+    "Quer que eu verifique a condição e já separe a quantidade necessária para vocês?"
+  ].join("\n");
+}
+
 function whatsappPhone(value) {
   const digits = String(value || "").replace(/\D/g, "");
   return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
@@ -1704,6 +1714,7 @@ function buildCrmRows(events, reservations, crmClients) {
       id: `crm-${row.companyKey}`,
       statusKey,
       status: crmStatusLabel(statusKey),
+      customerCode: String(meta.customerCode || ""),
       contactName: String(meta.contactName || ""),
       phone: String(meta.phone || ""),
       email: String(meta.email || ""),
@@ -1728,7 +1739,7 @@ function buildCrmRows(events, reservations, crmClients) {
       quoteRate: percent(row.productOpen ? row.quotes / row.productOpen : 0),
       quoteTotal: money(row.quoteTotalNumber),
       lastEvent: row.lastEventRaw ? dateTime(row.lastEventRaw) : "-",
-      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.contactName, meta.phone, meta.email, meta.city, meta.segment, meta.tags, ...topProducts].join(" ").toLowerCase()
+      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.customerCode, meta.contactName, meta.phone, meta.email, meta.city, meta.segment, meta.tags, ...topProducts].join(" ").toLowerCase()
     };
   }).sort((a, b) => b.score - a.score || new Date(b.lastEventRaw) - new Date(a.lastEventRaw));
 }
@@ -1809,7 +1820,7 @@ function buildCartInterestHistory(events, reservations, crmRows, crmClients = []
       businessStatus: businessStatusKey === "won" ? "Pedido fechado" : businessStatusKey === "lost" ? "Perdido" : businessStatusKey === "quoted" ? "Cotação enviada" : "Pendente",
       status: activeQty ? "No carrinho agora" : needsContact ? "Reserva expirada · mostrou interesse" : "Cotação enviada",
       lastActivity: row.lastActivityAt ? dateTime(row.lastActivityAt) : "-",
-      _search: [row.company, row.consultant, ...labels].join(" ").toLowerCase()
+      _search: [row.company, client?.customerCode, client?.contactName, client?.phone, row.consultant, ...labels].join(" ").toLowerCase()
     };
   }).sort((a, b) => Number(b.needsContact) - Number(a.needsContact) || b.lastActivityAt - a.lastActivityAt);
 }
@@ -1819,13 +1830,13 @@ function buildOpportunityRows(crmRows, events) {
   events.forEach((event) => {
     const key = companyKey(event.companyName);
     if (!key || cleanupReason(event.companyName)) return;
-    if (!eventSignals.has(key)) eventSignals.set(key, { lastAdd: 0, lastQuote: 0, lastSignalAt: 0, lastNoResult: "", lastProduct: "" });
+    if (!eventSignals.has(key)) eventSignals.set(key, { lastAdd: 0, lastQuote: 0, lastSignalAt: 0, lastNoResultAt: 0, lastNoResult: "", lastProduct: "" });
     const signal = eventSignals.get(key);
     const timestamp = new Date(event.timestamp).getTime() || 0;
     signal.lastSignalAt = Math.max(signal.lastSignalAt, timestamp);
     if (event.event === "add_to_cart") signal.lastAdd = Math.max(signal.lastAdd, timestamp);
     if (event.event === "whatsapp_quote") signal.lastQuote = Math.max(signal.lastQuote, timestamp);
-    if (event.event === "search_no_results") signal.lastNoResult = event.query || signal.lastNoResult;
+    if (event.event === "search_no_results" && timestamp >= signal.lastNoResultAt) { signal.lastNoResult = event.query || signal.lastNoResult; signal.lastNoResultAt = timestamp; }
     const label = productLabel(productFromEvent(event));
     if (label !== "Produto não informado") signal.lastProduct = label;
   });
@@ -1865,13 +1876,15 @@ function buildOpportunityRows(crmRows, events) {
     }
     const signalAt = signal.lastSignalAt || new Date(client.lastEventRaw).getTime() || 0;
     if (client.actionDoneAt && new Date(client.actionDoneAt).getTime() >= signalAt) reason = "";
+    const unmetDemand = priority === 70 ? signal.lastNoResult : "";
     return {
       ...client,
       priority,
       level,
       reason,
       actionSignalAt: signalAt,
-      interest: client.activeCartProducts[0] || signal.lastProduct || client.topProducts[0] || "-"
+      unmetDemand,
+      interest: unmetDemand || client.activeCartProducts[0] || signal.lastProduct || client.topProducts[0] || "-"
     };
   }).filter((row) => row.reason).sort((a, b) => b.priority - a.priority || b.score - a.score);
 }
@@ -1910,6 +1923,7 @@ function clientProfilePayload(client = {}, overrides = {}) {
   return {
     companyKey: client.companyKey,
     companyName: client.company || client.companyName,
+    customerCode: client.customerCode || "",
     contactName: client.contactName || "",
     phone: client.phone || "",
     email: client.email || "",
@@ -1963,40 +1977,68 @@ function buildActionCenterRows(opportunities, tasks, crmRows) {
   return [...taskRows, ...opportunityActions].sort((a, b) => b.priority - a.priority || b.score - a.score);
 }
 
-function buildDemandStockRows(events, catalogProducts, reservations) {
+function buildDemandStockRows(events, catalogProducts, reservations, crmRows = []) {
+  const signalPriority = { unavailable: 5, priority: 4, restocked: 3, pressure: 2, no_snapshot: 1, normal: 0 };
   const catalog = new Map(catalogProducts.map((item) => [String(item.productCode || "").trim(), item]));
+  const clientMap = new Map(crmRows.map((client) => [client.companyKey, client]));
   const reserved = new Map();
   reservations.forEach((item) => {
     const code = String(item.productCode || "").trim();
     if (code) reserved.set(code, (reserved.get(code) || 0) + safeNumber(item.reservedNumber ?? item.reservedQty));
   });
   const map = new Map();
-  function touch(product, type, quantity = 1) {
+  function touch(product, type, quantity = 1, event = {}) {
     const code = String(product?.productCode || product?.code || "").trim();
     if (!code) return;
-    if (!map.has(code)) map.set(code, { productCode: code, productName: String(product?.productName || product?.name || ""), views: 0, carts: 0, quotes: 0 });
+    if (!map.has(code)) map.set(code, { productCode: code, productName: String(product?.productName || product?.name || ""), searches: 0, views: 0, carts: 0, quotes: 0, clients: new Map() });
     const row = map.get(code);
+    if (type === "search") row.searches += 1;
     if (type === "view") row.views += 1;
     if (type === "cart") row.carts += Math.max(1, safeNumber(quantity));
     if (type === "quote") row.quotes += Math.max(1, safeNumber(quantity));
+    const company = normalizeCompany(event.companyName);
+    const key = companyKey(company);
+    if (key && !isAnonymousCompany(company) && !cleanupReason(company)) {
+      if (!row.clients.has(key)) row.clients.set(key, { companyKey: key, company, consultant: normalizeConsultant(event.consultant).toUpperCase(), searches: 0, views: 0, carts: 0, quotes: 0, lastAt: 0 });
+      const client = row.clients.get(key);
+      client[type === "search" ? "searches" : type === "view" ? "views" : type === "cart" ? "carts" : "quotes"] += Math.max(1, safeNumber(quantity));
+      client.lastAt = Math.max(client.lastAt, new Date(event.timestamp).getTime() || 0);
+    }
   }
   events.forEach((event) => {
-    if (event.event === "product_open") touch(productFromEvent(event), "view");
-    if (event.event === "add_to_cart") touch(productFromEvent(event), "cart", event.quantity);
-    if (event.event === "whatsapp_quote") quoteProducts(event).forEach((product) => touch(product, "quote", productQuantity(product, 1)));
+    if (event.event === "product_open") touch(productFromEvent(event), "view", 1, event);
+    if (event.event === "add_to_cart") touch(productFromEvent(event), "cart", event.quantity, event);
+    if (event.event === "whatsapp_quote") quoteProducts(event).forEach((product) => touch(product, "quote", productQuantity(product, 1), event));
+    if (["search", "search_no_results"].includes(event.event) && event.query) {
+      const needle = String(event.query).trim().toLowerCase();
+      const normalizedNeedle = needle.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      const matches = [...catalog.values()].filter((product) => {
+        const code = String(product.productCode || "").toLowerCase();
+        const name = String(product.productName || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        return code === needle || (normalizedNeedle.length >= 3 && name.includes(normalizedNeedle));
+      }).slice(0, 8);
+      matches.forEach((product) => touch(product, "search", 1, event));
+    }
   });
   return [...map.values()].map((row) => {
     const product = catalog.get(row.productCode) || {};
     const stockQty = safeNumber(product.stockQty);
     const reservedQty = reserved.get(row.productCode) || 0;
     const availableQty = Math.max(0, stockQty - reservedQty);
-    const demandScore = row.views + row.carts * 3 + row.quotes * 10;
+    const demandScore = row.searches * 2 + row.views + row.carts * 3 + row.quotes * 10;
     const pressure = demandScore && catalog.has(row.productCode) ? demandScore / Math.max(1, availableQty) : 0;
     let signal = "Demanda normal";
+    let signalKey = "normal";
     if (!catalog.has(row.productCode)) signal = "Sem snapshot de estoque";
-    else if (availableQty <= 0 && demandScore) signal = "Procura sem disponibilidade";
-    else if (pressure >= 8) signal = "Reposição prioritária";
-    else if (pressure >= 3) signal = "Estoque sob pressão";
+    if (!catalog.has(row.productCode)) signalKey = "no_snapshot";
+    else if (availableQty <= 0 && demandScore) { signal = "Procura sem disponibilidade"; signalKey = "unavailable"; }
+    else if (product.restockedAt && safeNumber(product.previousStockQty) <= 0 && stockQty > 0) { signal = "Estoque normalizado"; signalKey = "restocked"; }
+    else if (pressure >= 8) { signal = "Reposição prioritária"; signalKey = "priority"; }
+    else if (pressure >= 3) { signal = "Estoque sob pressão"; signalKey = "pressure"; }
+    const clients = [...row.clients.values()].map((item) => {
+      const crmClient = clientMap.get(item.companyKey) || null;
+      return { ...(crmClient || {}), ...item, crmClient, company: item.company, consultant: item.consultant, lastAt: item.lastAt };
+    }).sort((a, b) => b.quotes - a.quotes || b.carts - a.carts || b.searches - a.searches || b.views - a.views);
     return {
       ...row,
       id: `demand-${row.productCode}`,
@@ -2006,11 +2048,16 @@ function buildDemandStockRows(events, catalogProducts, reservations) {
       reservedQty,
       availableQty,
       demandScore,
+      searches: row.searches,
       pressure,
       signal,
+      signalKey,
+      clients,
+      clientsCount: clients.length,
+      restockedAt: product.restockedAt || "",
       _search: [row.productCode, row.productName, product.productName, product.brand, signal].join(" ").toLowerCase()
     };
-  }).sort((a, b) => b.pressure - a.pressure || b.demandScore - a.demandScore);
+  }).sort((a, b) => (signalPriority[b.signalKey] || 0) - (signalPriority[a.signalKey] || 0) || b.demandScore - a.demandScore);
 }
 
 function buildAlerts({ actionRows, tasks, reservationKpis, catalogHealth }) {
@@ -2453,6 +2500,7 @@ function App() {
   const [toast, setToast] = useState(null);
   const [activeModal, setActiveModal] = useState(null);
   const [selectedClient, setSelectedClient] = useState(null);
+  const [selectedDemandProduct, setSelectedDemandProduct] = useState(null);
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
   const [selectedCleanupKeys, setSelectedCleanupKeys] = useState([]);
   const [isCleaning, setIsCleaning] = useState(false);
@@ -2664,7 +2712,7 @@ function App() {
   const cartInterestHistory = useMemo(() => buildCartInterestHistory(crmEventScope, filteredReservations, crmRows, crmClients), [crmEventScope, filteredReservations, crmRows, crmClients]);
   const opportunityRows = useMemo(() => buildOpportunityRows(crmRows, filtered), [crmRows, filtered]);
   const actionRows = useMemo(() => buildActionCenterRows(opportunityRows, normalizedTasks, crmRows), [opportunityRows, normalizedTasks, crmRows]);
-  const demandStockRows = useMemo(() => buildDemandStockRows(filtered, catalogHealth.products || [], filteredReservations), [filtered, catalogHealth.products, filteredReservations]);
+  const demandStockRows = useMemo(() => buildDemandStockRows(filtered, catalogHealth.products || [], filteredReservations, crmRows), [filtered, catalogHealth.products, filteredReservations, crmRows]);
   const alerts = useMemo(() => buildAlerts({ actionRows, tasks: normalizedTasks, reservationKpis, catalogHealth }), [actionRows, normalizedTasks, reservationKpis, catalogHealth]);
   const cleanupCandidates = useMemo(() => buildCleanupCandidates(events), [events]);
   const duplicateCompanyGroups = useMemo(() => buildDuplicateCompanyGroups(events), [events]);
@@ -2880,6 +2928,10 @@ function App() {
     setSelectedClient(client);
   }
 
+  function openDemandProduct(product) {
+    setSelectedDemandProduct(product);
+  }
+
   function openCartInterestClient(row) {
     if (row.client) setSelectedClient({ ...row.client, initialTab: "cart" });
   }
@@ -2905,7 +2957,7 @@ function App() {
       : client.activeCartQty > 0 || client.priority === 90
         ? "cart"
         : client.priority === 70
-          ? "interests"
+          ? "demand"
           : "summary";
     setSelectedClient({ ...client, initialTab });
   }
@@ -2924,6 +2976,7 @@ function App() {
         ...current,
         statusKey: normalized.status,
         status: crmStatusLabel(normalized.status),
+        customerCode: normalized.customerCode || "",
         contactName: normalized.contactName || "",
         phone: normalized.phone,
         email: normalized.email || "",
@@ -2959,6 +3012,7 @@ function App() {
       owner: normalizeConsultant(normalized.owner).toUpperCase(),
       statusKey: normalized.status || "new",
       status: crmStatusLabel(normalized.status || "new"),
+      customerCode: normalized.customerCode || "",
       contactName: normalized.contactName || "",
       phone: normalized.phone || "",
       email: normalized.email || "",
@@ -3079,6 +3133,13 @@ function App() {
       status,
       lostReason: status === "lost" ? client.lostReason || "Outro" : ""
     }));
+  }
+
+  async function markCartBusinessStatus(row, status) {
+    const client = row.client || crmRows.find((item) => item.companyKey === row.companyKey);
+    if (!client) { showToast("Abra o cliente e salve a ficha antes de alterar a situação.", "error"); return; }
+    await moveClientStage(client, status);
+    showToast(status === "won" ? "Carrinho movido para Pedido fechado." : status === "lost" ? "Carrinho movido para Perdido." : "Carrinho reaberto para acompanhamento.");
   }
 
   async function saveMonthlyTarget(value) {
@@ -3579,12 +3640,12 @@ function App() {
             { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
             { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
           ]}/>
-          <ProductIntelligenceView hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal}/>
+          <ProductIntelligenceView hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenStock={openDemandProduct}/>
         </div>
       ) : null}
 
       {activeView === "catalog" ? (
-        <CatalogHealthView health={catalogHealth} demandRows={demandStockRows} onNavigate={setActiveView}/>
+        <CatalogHealthView health={catalogHealth} demandRows={demandStockRows} onNavigate={setActiveView} onOpenDemand={openDemandProduct}/>
       ) : null}
 
       {activeView === "carts" ? (
@@ -3596,7 +3657,7 @@ function App() {
             { icon: <Send/>, label: "Cotações em andamento", value: reservationKpis.quoted, onOpen: () => openReservationsModal("Cotações em andamento"), emphasis: true }
           ]}/>
           <section className="overview-grid reservations-overview-grid">
-            <CartWorkspace activeRows={activeCartRows} historyRows={cartInterestHistory} onOpenActive={openActiveCartClient} onOpenHistory={openCartInterestClient} onCopy={copyCartFollowUp}/>
+            <CartWorkspace activeRows={activeCartRows} historyRows={cartInterestHistory} onOpenActive={openActiveCartClient} onOpenHistory={openCartInterestClient} onCopy={copyCartFollowUp} onMarkStatus={markCartBusinessStatus}/>
             <article className="panel reservation-rules-panel">
               <div className="panel-head"><h2><UserCheck size={18}/> Como ler</h2><span>Atualização automática</span></div>
               <div className="reservation-rule-list">
@@ -3734,6 +3795,7 @@ function App() {
           isSaving={isSavingCrm}
         />
       ) : null}
+      {selectedDemandProduct ? <ProductDemandModal product={selectedDemandProduct} onClose={() => setSelectedDemandProduct(null)} onOpenClient={(client) => { setSelectedDemandProduct(null); setSelectedClient(client); }} onCopy={async (product) => { await copyTextToClipboard(stockRestockMessage(product)); showToast("Mensagem de reposição copiada."); }}/> : null}
       {isNewClientOpen ? <NewClientModal owner={authProfile.displayName || authProfile.username} onClose={() => setIsNewClientOpen(false)} onSave={createManualClient} isSaving={isSavingCrm}/> : null}
       {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
     </main>
@@ -3821,7 +3883,7 @@ function GoalPanel({ target = 0, result = 0, won = 0, lost = 0, onSave }) {
   );
 }
 
-function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpenHistory, onCopy }) {
+function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpenHistory, onCopy, onMarkStatus }) {
   const [mode, setMode] = useState(activeRows.length ? "active" : "history");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("pending");
@@ -3830,10 +3892,10 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
   }, [activeRows.length, historyRows.length]);
   const visibleHistory = historyRows.filter((row) => {
     const matchesQuery = !query.trim() || row._search.includes(query.trim().toLowerCase());
-    const matchesStatus = status === "all" || (status === "followup" ? row.needsContact : row.businessStatusKey === status);
+    const matchesStatus = status === "all" || (status === "followup" ? row.needsContact && row.businessStatusKey === "pending" : row.businessStatusKey === status);
     return matchesQuery && matchesStatus;
   });
-  const followUps = historyRows.filter((row) => row.needsContact).length;
+  const followUps = historyRows.filter((row) => row.needsContact && row.businessStatusKey === "pending").length;
   const dateGroups = groupItemsByDate(visibleHistory, (row) => row.lastActivityAt);
   const businessTabs = [
     ["all", "Todos"], ["pending", "Pendentes"], ["quoted", "Cotação enviada"], ["won", "Pedido fechado"], ["lost", "Perdido"]
@@ -3854,7 +3916,7 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
     </div> : null}
 
     {mode === "history" ? <>
-      <div className="cart-history-tools"><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, código ou produto"/></label></div>
+      <div className="cart-history-tools"><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, contato, código do cliente ou produto"/></label></div>
       <nav className="cart-status-tabs">{businessTabs.map(([key, label]) => <button key={key} type="button" className={status === key ? "active" : ""} onClick={() => setStatus(key)}><span>{label}</span><b>{historyRows.filter((row) => key === "all" || row.businessStatusKey === key).length}</b></button>)}</nav>
       <div className="cart-history-list date-group-list">
         {dateGroups.map((group, groupIndex) => <details className="date-group" key={group.key} open={groupIndex === 0}><summary><span><CalendarDays size={15}/><strong>{group.label}</strong></span><b>{group.items.length} cliente(s)</b><ChevronDown size={15}/></summary><div>{group.items.map((row) => {
@@ -3864,7 +3926,7 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
             <span className="cart-history-client"><strong>{row.company}</strong><small>{row.consultant} · última atividade {row.lastActivity}</small></span>
             <span className="cart-history-products"><strong>{row.productsCount} produto(s) · {row.followUpContext.itemsCount || row.itemsCount} peça(s){row.estimatedTotal ? ` · ${money(row.estimatedTotal)}` : ""}</strong><small title={row.productsSummary}>{row.productsSummary || "Produtos não informados"}</small></span>
             <span className={`cart-history-status ${row.needsContact ? "needs-contact" : ""}`}>{row.businessStatus}</span>
-            <span className="cart-history-actions"><button type="button" onClick={(event) => { event.stopPropagation(); onCopy(row); }}><Copy size={14}/> Copiar mensagem</button>{phone ? <a href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}><Send size={14}/> WhatsApp</a> : null}</span>
+            <span className="cart-history-actions"><button type="button" onClick={(event) => { event.stopPropagation(); onOpenHistory(row); }}><Eye size={14}/> Abrir</button>{["pending","quoted"].includes(row.businessStatusKey) ? <><button type="button" onClick={(event) => { event.stopPropagation(); onCopy(row); }}><Copy size={14}/> Mensagem</button>{phone ? <a href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}><Send size={14}/> WhatsApp</a> : null}<button type="button" className="success" onClick={(event) => { event.stopPropagation(); onMarkStatus(row, "won"); }}><CheckCircle2 size={14}/> Fechado</button><button type="button" className="danger" onClick={(event) => { event.stopPropagation(); onMarkStatus(row, "lost"); }}><XCircle size={14}/> Perdido</button></> : <button type="button" onClick={(event) => { event.stopPropagation(); onMarkStatus(row, "waiting"); }}><RefreshCw size={14}/> Reabrir</button>}</span>
           </div>;
         })}</div></details>)}
         {!visibleHistory.length ? <EmptyState message="Nenhum histórico corresponde aos filtros."/> : null}
@@ -3975,15 +4037,18 @@ function PipelineBoard({ rows = [], onOpen, onMove }) {
   );
 }
 
-function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = [], onOpenHot, onOpenQuoted, onOpenMissing }) {
+function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = [], onOpenHot, onOpenQuoted, onOpenMissing, onOpenStock }) {
   const [tab, setTab] = useState("hot");
+  const [stockFilter, setStockFilter] = useState("all");
+  const [stockQuery, setStockQuery] = useState("");
   const tabs = [
     ["hot", "Mais procurados", hot.length],
     ["quoted", "Mais cotados", quoted.length],
     ["stock", "Demanda x estoque", stock.length],
     ["missing", "Não encontrados", missing.length]
   ];
-  const rows = tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
+  const sourceRows = tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
+  const rows = tab === "stock" ? sourceRows.filter((row) => (stockFilter === "all" || row.signalKey === stockFilter) && (!stockQuery.trim() || row._search.includes(stockQuery.trim().toLowerCase()))) : sourceRows;
   function splitLabel(label) {
     const text = String(label || "");
     const index = text.indexOf(" - ");
@@ -3992,6 +4057,7 @@ function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = 
   return <article className="panel product-intelligence">
     <div className="panel-head"><div><h2><Flame size={18}/> Inteligência de produtos</h2><p>Uma leitura por vez, com código e descrição sempre visíveis.</p></div><button type="button" className="refresh" onClick={tab === "hot" ? onOpenHot : tab === "quoted" ? onOpenQuoted : tab === "missing" ? onOpenMissing : undefined} disabled={tab === "stock"}>Abrir relatório completo</button></div>
     <nav className="product-tabs">{tabs.map(([key, label, count]) => <button type="button" key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><span>{label}</span><b>{count}</b></button>)}</nav>
+    {tab === "stock" ? <div className="demand-filterbar"><label><Search size={14}/> Buscar<input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="código, produto ou marca"/></label><label><Filter size={14}/> Prioridade<select value={stockFilter} onChange={(event) => setStockFilter(event.target.value)}><option value="all">Todas</option><option value="unavailable">Procura sem disponibilidade</option><option value="priority">Reposição prioritária</option><option value="pressure">Estoque sob pressão</option><option value="restocked">Estoque normalizado</option><option value="normal">Demanda normal</option></select></label></div> : null}
     <div className="product-readable-table">
       <div className="product-readable-head"><span>Produto / termo</span><span>{tab === "missing" ? "Ocorrências" : "Aberturas"}</span><span>{tab === "stock" ? "Estoque" : "Carrinhos"}</span><span>{tab === "stock" ? "Disponível" : "Cotações"}</span><span>Sinal</span></div>
       {rows.slice(0, 50).map((row, index) => {
@@ -4001,26 +4067,51 @@ function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = 
         const second = tab === "missing" ? row.companies : tab === "stock" ? row.stockQty : row.carts;
         const third = tab === "missing" ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
         const signal = tab === "missing" ? `${row.companies || 0} empresa(s)` : tab === "stock" ? row.signal : `${row.score || 0} pts`;
-        return <div className="product-readable-row" key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
+        return <div className={`product-readable-row ${tab === "stock" ? "clickable-demand" : ""}`} role={tab === "stock" ? "button" : undefined} tabIndex={tab === "stock" ? 0 : undefined} onClick={tab === "stock" ? () => onOpenStock?.(row) : undefined} onKeyDown={tab === "stock" ? (event) => { if (event.key === "Enter") onOpenStock?.(row); } : undefined} key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
       })}
       {!rows.length ? <EmptyState message="Sem dados para esta leitura no período."/> : null}
     </div>
   </article>;
 }
 
-function DemandStockTable({ rows = [] }) {
+function ProductDemandModal({ product, onClose, onOpenClient, onCopy }) {
+  const [query, setQuery] = useState("");
+  const clients = (product.clients || []).filter((client) => !query.trim() || [client.company, client.contactName, client.customerCode, client.phone, client.consultant].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
+  useEffect(() => {
+    function keydown(event) { if (event.key === "Escape") onClose(); }
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [onClose]);
+  return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}><section className="product-demand-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+    <header className="client-modal-header"><div><span className="eyebrow">Demanda e reposição</span><h2>{product.productCode} — {product.productName}</h2><p>{product.signal} · {product.clientsCount || 0} cliente(s) identificado(s)</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></header>
+    <div className="product-demand-kpis"><div><span>Buscas</span><strong>{product.searches || 0}</strong></div><div><span>Aberturas</span><strong>{product.views || 0}</strong></div><div><span>Carrinhos</span><strong>{product.carts || 0}</strong></div><div><span>Cotações</span><strong>{product.quotes || 0}</strong></div><div><span>Estoque</span><strong>{product.stockQty || 0}</strong></div><div><span>Disponível</span><strong>{product.availableQty || 0}</strong></div></div>
+    <div className={`restock-monitor ${product.stockQty > 0 ? "available" : "waiting"}`}><Bell size={18}/><span><strong>{product.stockQty > 0 ? "Reposição disponível para contato" : "Monitoramento automático ativo"}</strong><small>{product.stockQty > 0 ? "Copie a mensagem ou abra o WhatsApp de cada cliente." : "Quando o estoque sair de zero, o sistema criará uma tarefa no CRM para cada cliente interessado."}</small></span>{product.stockQty > 0 ? <button type="button" onClick={() => onCopy(product)}><Copy size={14}/> Copiar mensagem padrão</button> : null}</div>
+    <div className="demand-client-tools"><label><Search size={14}/> Buscar cliente<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, contato, código ou telefone"/></label><span>{clients.length} cliente(s)</span></div>
+    <div className="demand-client-list">{clients.map((client) => {
+      const phone = whatsappPhone(client.phone);
+      const message = stockRestockMessage(product, client);
+      return <article key={client.companyKey}><button type="button" className="demand-client-main" onClick={() => onOpenClient(client.crmClient || client)}><span><strong>{client.company}</strong><small>{client.customerCode ? `Código ${client.customerCode} · ` : ""}{client.contactName || "Contato não informado"}</small></span><span><b>{client.searches || 0}</b><small>buscas</small></span><span><b>{client.views || 0}</b><small>aberturas</small></span><span><b>{client.carts || 0}</b><small>carrinho</small></span><span><b>{client.quotes || 0}</b><small>cotações</small></span><time>{client.lastAt ? dateTime(client.lastAt) : "-"}</time></button><div className="demand-client-actions"><button type="button" onClick={() => onOpenClient(client.crmClient || client)}><Eye size={14}/> Cliente 360</button>{product.stockQty > 0 ? <><button type="button" onClick={() => copyTextToClipboard(message)}><Copy size={14}/> Copiar</button>{phone ? <a href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer"><Send size={14}/> WhatsApp</a> : null}</> : <span>Aguardando reposição</span>}</div></article>;
+    })}{!clients.length ? <EmptyState message="Nenhum cliente corresponde à busca."/> : null}</div>
+  </section></div>;
+}
+
+function DemandStockTable({ rows = [], onOpen }) {
+  const [query, setQuery] = useState("");
+  const [signal, setSignal] = useState("all");
+  const visibleRows = rows.filter((row) => (signal === "all" || row.signalKey === signal) && (!query.trim() || row._search.includes(query.trim().toLowerCase())));
   return (
     <article className="panel demand-stock-panel">
-      <div className="panel-head"><div><h2><Flame size={18}/> Demanda x estoque</h2><p>Combina aberturas, carrinhos, cotações, estoque e reservas ativas.</p></div><span>{rows.length} produto(s)</span></div>
+      <div className="panel-head"><div><h2><Flame size={18}/> Demanda x estoque</h2><p>Filtre por prioridade e clique no item para ver todos os clientes interessados.</p></div><span>{visibleRows.length} produto(s)</span></div>
+      <div className="demand-filterbar"><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="código, produto ou marca"/></label><label><Filter size={14}/> Prioridade<select value={signal} onChange={(event) => setSignal(event.target.value)}><option value="all">Todas</option><option value="unavailable">Procura sem disponibilidade</option><option value="priority">Reposição prioritária</option><option value="pressure">Estoque sob pressão</option><option value="restocked">Estoque normalizado</option><option value="normal">Demanda normal</option><option value="no_snapshot">Sem snapshot</option></select></label></div>
       <div className="demand-stock-table">
         <div className="demand-stock-head"><span>Produto</span><span>Demanda</span><span>Estoque</span><span>Reservado</span><span>Disponível</span><span>Sinal</span></div>
-        {rows.length ? rows.map((row) => <div key={row.id} className="demand-stock-row"><span><strong>{row.productCode}</strong><small>{row.productName}</small></span><b>{row.demandScore}</b><b>{row.stockQty}</b><b>{row.reservedQty}</b><b>{row.availableQty}</b><span className={`stock-signal ${row.signal.includes("prioritária") || row.signal.includes("sem disponibilidade") ? "critical" : row.signal.includes("pressão") ? "warning" : "normal"}`}>{row.signal}</span></div>) : <EmptyState message="Aguardando sinais de produto e snapshot do catálogo."/>}
+        {visibleRows.length ? visibleRows.map((row) => <button type="button" key={row.id} className="demand-stock-row demand-stock-button" onClick={() => onOpen?.(row)}><span><strong>{row.productCode}</strong><small>{row.productName}</small><small>{row.clientsCount} cliente(s) interessado(s)</small></span><b>{row.demandScore}</b><b>{row.stockQty}</b><b>{row.reservedQty}</b><b>{row.availableQty}</b><span className={`stock-signal ${["priority","unavailable"].includes(row.signalKey) ? "critical" : row.signalKey === "pressure" ? "warning" : row.signalKey === "restocked" ? "restocked" : "normal"}`}>{row.signal}</span></button>) : <EmptyState message="Nenhum produto corresponde aos filtros."/>}
       </div>
     </article>
   );
 }
 
-function CatalogHealthView({ health = {}, demandRows = [], onNavigate }) {
+function CatalogHealthView({ health = {}, demandRows = [], onNavigate, onOpenDemand }) {
   const latest = health.latest;
   const snapshots = health.snapshots || [];
   const age = latest ? Date.now() - new Date(latest.createdAt).getTime() : Infinity;
@@ -4043,7 +4134,7 @@ function CatalogHealthView({ health = {}, demandRows = [], onNavigate }) {
           <div>{snapshots.slice(0, 8).map((item) => <div className="snapshot-row" key={item.snapshotId}><i className={item.status === "error" ? "error" : "success"}/><span><strong>{dateTime(item.createdAt)}</strong><small>{item.source || "Atualização diária"}</small></span><b>{safeNumber(item.productCount)} produtos</b></div>)}{!snapshots.length ? <p className="empty">Sem execuções registradas.</p> : null}</div>
         </article>
       </section>
-      <DemandStockTable rows={demandRows.slice(0, 50)}/>
+      <DemandStockTable rows={demandRows} onOpen={onOpenDemand}/>
     </div>
   );
 }
@@ -4054,7 +4145,7 @@ function OpportunityList({ rows = [], onOpen, onEdit, onFinish, onDelete, active
   const visibleRows = rows.filter((row) => {
     const matchesLevel = level === "all" || row.level === level || (level === "priority" && row.priority >= 80);
     const needle = query.trim().toLowerCase();
-    const matchesQuery = !needle || [row.company, row.reason, row.interest, row.owner].join(" ").toLowerCase().includes(needle);
+    const matchesQuery = !needle || [row.company, row.customerCode, row.contactName, row.reason, row.interest, row.owner].join(" ").toLowerCase().includes(needle);
     return matchesLevel && matchesQuery;
   });
 
@@ -4109,7 +4200,7 @@ function ClientCrmTable({ rows = [], onOpen }) {
         <span>{visibleRows.length} cliente(s)</span>
       </div>
       <div className="table-tools">
-        <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, responsável ou tag"/></label>
+        <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, contato, código interno, telefone ou tag"/></label>
         <label><Filter size={14}/> Etapa
           <select value={status} onChange={(event) => setStatus(event.target.value)}>
             <option value="all">Todas</option>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="active">Cliente ativo</option><option value="cold">Frio</option>
@@ -4122,7 +4213,7 @@ function ClientCrmTable({ rows = [], onOpen }) {
           <tbody>
             {visibleRows.map((row) => (
               <tr key={row.id} tabIndex="0" onClick={() => onOpen(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(row); }}>
-                <td><strong>{row.company}</strong><small>{row.lastEvent}</small></td>
+                <td><strong>{row.company}</strong><small>{row.customerCode ? `Código ${row.customerCode} · ` : ""}{row.contactName || row.lastEvent}</small></td>
                 <td><span className={`crm-status status-${row.statusKey}`}>{row.status}</span></td>
                 <td>{row.owner || "-"}</td><td>{row.score}</td><td>{row.activeCartQty || "-"}</td><td>{row.quotes}</td><td>{row.quoteTotal}</td><td>{row.nextContact}</td>
               </tr>
@@ -4263,7 +4354,7 @@ function buildClientInterestRows(events = [], reservations = []) {
 }
 
 function NewClientModal({ owner, onClose, onSave, isSaving }) {
-  const [form, setForm] = useState({ companyName: "", contactName: "", phone: "", email: "", city: "", segment: "", status: "new", owner: owner || "", nextContactAt: "", expectedValue: "", tags: "", notes: "" });
+  const [form, setForm] = useState({ companyName: "", customerCode: "", contactName: "", phone: "", email: "", city: "", segment: "", status: "new", owner: owner || "", nextContactAt: "", expectedValue: "", tags: "", notes: "" });
   const [error, setError] = useState("");
   function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
   async function submit(event) {
@@ -4279,6 +4370,7 @@ function NewClientModal({ owner, onClose, onSave, isSaving }) {
     <header className="client-modal-header"><div><span className="eyebrow">Novo cliente</span><h2>Cadastrar na carteira</h2><p>O cliente já entra no funil e fica vinculado ao vendedor responsável.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></header>
     <form className="client-form client-form-v2" onSubmit={submit}><div className="client-form-grid">
       <label>Empresa *<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required autoFocus/></label>
+      <label>Código interno<input value={form.customerCode} onChange={(event) => update("customerCode", event.target.value)} placeholder="Código do cliente"/></label>
       <label>Contato<input value={form.contactName} onChange={(event) => update("contactName", event.target.value)} placeholder="Nome da pessoa"/></label>
       <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
       <label>E-mail<input type="email" value={form.email} onChange={(event) => update("email", event.target.value)}/></label>
@@ -4298,7 +4390,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const initialContactDate = crmContactDate(client.nextContactAt);
   const [tab, setTab] = useState(client.initialTab || "summary");
   const [form, setForm] = useState({
-    companyName: client.company, contactName: client.contactName || "", phone: client.phone || "", email: client.email || "", city: client.city || "", segment: client.segment || "", status: client.statusKey || "new", owner: client.owner || "",
+    companyName: client.company, customerCode: client.customerCode || "", contactName: client.contactName || "", phone: client.phone || "", email: client.email || "", city: client.city || "", segment: client.segment || "", status: client.statusKey || "new", owner: client.owner || "",
     nextContactAt: initialContactDate ? localDateInput(initialContactDate) : "", tags: client.tags || "", notes: client.notes || "",
     expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || ""
   });
@@ -4312,6 +4404,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
   const quoteEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "whatsapp_quote")), [events]);
   const cartEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "add_to_cart")), [events]);
+  const unmetDemandEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "search_no_results")), [events]);
   const cartEventGroups = useMemo(() => groupItemsByDate(cartEvents), [cartEvents]);
   const followUpContext = useMemo(() => buildCartFollowUpContext(events), [events]);
   const activeReservationCodes = useMemo(() => new Set(reservations.map((item) => String(item.productCode || "").trim()).filter(Boolean)), [reservations]);
@@ -4366,7 +4459,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   }
 
   const tabs = [
-    ["summary", "Resumo"], ["interests", `Interesses (${interestRows.length})`], ["cart", `Carrinho e cotações (${reservations.length + quoteEvents.length + cartEvents.length})`],
+    ["summary", "Resumo"], ["interests", `Interesses (${interestRows.length})`], ["demand", `Demanda não atendida (${unmetDemandEvents.length})`], ["cart", `Carrinho e cotações (${reservations.length + quoteEvents.length + cartEvents.length})`],
     ["notes", `Anotações (${noteActivities.length})`], ["tasks", `Tarefas (${openTasks.length})`], ["history", "Histórico"]
   ];
 
@@ -4379,6 +4472,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
         {tab === "summary" ? <form className="client-form client-form-v2" onSubmit={handleSubmit}>
           <div className="client-form-grid">
             <label>Empresa<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required/></label>
+            <label>Código interno<input value={form.customerCode} onChange={(event) => update("customerCode", event.target.value)} placeholder="Código do cliente"/></label>
             <label>Contato<input value={form.contactName} onChange={(event) => update("contactName", event.target.value)} placeholder="Nome da pessoa"/></label>
             <label>Etapa<select value={form.status} onChange={(event) => update("status", event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>
             <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
@@ -4394,6 +4488,8 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
         </form> : null}
 
         {tab === "interests" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Interesses principais</h3><p>Produtos organizados por código, descrição, quantidade e valor cotado.</p></div></div><div className="interest-table"><div className="interest-table-head"><span>Código</span><span>Descrição</span><span>Qtd.</span><span>Sinais</span><span>Valor cotado</span></div>{interestRows.map((row) => <div className="interest-table-row" key={row.id}><b>{row.code}</b><span>{row.name}</span><strong>{row.quantity || row.reserved || 1}</strong><small>{row.opens} abertura(s) · {row.carts} carrinho · {row.quotes} cotado(s){row.reserved ? ` · ${row.reserved} reservado(s)` : ""}</small><b>{money(row.value)}</b></div>)}{!interestRows.length ? <EmptyState message="Nenhum produto identificado para este cliente."/> : null}</div></section> : null}
+
+        {tab === "demand" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Demanda não atendida</h3><p>Somente buscas que não encontraram resultado — sem misturar os outros itens do pedido.</p></div></div><div className="unmet-demand-list">{unmetDemandEvents.map((event) => <article key={`${event.id}-${event.timestamp}`}><span><Search size={17}/><strong>{event.query || "Busca não informada"}</strong><small>{dateTime(event.timestamp)} · {event.consultant?.toUpperCase() || client.owner}</small></span><button type="button" onClick={() => copyTextToClipboard(`Cliente ${client.company} procurou por: ${event.query || "item não informado"}.`)}><Copy size={14}/> Copiar demanda</button></article>)}{!unmetDemandEvents.length ? <EmptyState message="Nenhuma busca sem resultado para este cliente."/> : null}</div></section> : null}
 
         {tab === "cart" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Carrinho e cotações</h3><p>A reserva pode expirar; o interesse e os produtos continuam disponíveis para acompanhamento.</p></div></div><article className="cart-followup-card"><div><span>Acompanhamento comercial</span><strong>O cliente separou itens, mas ainda não concluiu a cotação?</strong><p className="message-preview">{cartFollowUpMessage(followUpContext)}</p></div><div className="cart-followup-actions"><button type="button" onClick={handleCopyFollowUp}><Copy size={15}/> {copiedFollowUp ? "Mensagem copiada" : "Copiar mensagem"}</button>{whatsappDigits ? <a href={`https://wa.me/${whatsappDigits}?text=${encodeURIComponent(cartFollowUpMessage(followUpContext))}`} target="_blank" rel="noreferrer"><Send size={15}/> Enviar no WhatsApp</a> : <small>Cadastre o telefone no Resumo para abrir o WhatsApp direto.</small>}</div></article><div className="cart-detail-grid"><article><h4>Reserva ativa</h4>{reservations.map((item, index) => <div className="cart-detail-row" key={`${item.productCode}-${index}`}><span><b>{item.productCode || "-"}</b><small>{item.product || "Produto sem descrição"}</small></span><strong>{safeNumber(item.reservedNumber)} reservada(s)</strong>{safeNumber(item.excessNumber) ? <em>{safeNumber(item.excessNumber)} sob consulta</em> : null}</div>)}{!reservations.length ? <EmptyState message="Nenhum item reservado agora."/> : null}</article><article><h4>Cotações enviadas</h4>{quoteEvents.map((event) => <div className="quote-detail-row" key={`${event.id}-${event.timestamp}`}><span><b>{quoteItemsCount(event)} item(ns) · {money(event.cartTotal || event.total)}</b><small>{quoteProductsSummary(event)}</small></span><time>{dateTime(event.timestamp)}</time></div>)}{!quoteEvents.length ? <EmptyState message="Nenhuma cotação enviada."/> : null}</article></div><article className="client-cart-history"><div className="client-cart-history-head"><div><h4>Histórico de interesse</h4><p>Organizado por data; clique no dia para abrir os itens.</p></div><b>{cartEvents.length} registro(s)</b></div><div className="client-cart-history-list date-group-list">{cartEventGroups.map((group, groupIndex) => <details className="date-group" key={group.key} open={groupIndex === 0}><summary><span><CalendarDays size={15}/><strong>{group.label}</strong></span><b>{group.items.length} item(ns)</b><ChevronDown size={15}/></summary><div>{group.items.map((event) => {
           const product = productFromEvent(event);

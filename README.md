@@ -1,9 +1,16 @@
-# Z Connect Analytics CRM 12.0
+# Z Connect Analytics CRM 12.1
 
 Painel de inteligência comercial com login real no servidor, fila diária, funil Kanban, Cliente 360, tarefas, metas, resultados, reservas e monitor do catálogo. Nenhuma regra de preço ou desconto foi alterada.
 
 ## O que entrou nesta versão
 
+- Demanda x estoque com busca e filtros por procura sem disponibilidade, reposição prioritária, pressão, normalização e situação normal.
+- Clique no produto para abrir os clientes que buscaram, visualizaram, adicionaram ou cotaram o item.
+- Mensagem pronta de reposição por cliente e acesso direto ao WhatsApp.
+- Tarefas automáticas no CRM quando o snapshot detecta que um produto saiu de estoque zero para disponível.
+- Código interno do cliente no cadastro, Cliente 360 e buscas da carteira, fila e carrinhos.
+- Demanda não atendida exibe exclusivamente a busca sem resultado.
+- Pedidos fechados e perdidos não aparecem mais em **Precisam de contato**; podem ser reabertos pelo histórico.
 - Cadastro manual de clientes, edição, exclusão controlada e inclusão direta no funil, respeitando a carteira de cada vendedor.
 - Cliente 360 ampliado com contato, e-mail, cidade, segmento, resumo fixo e anotações cronológicas independentes.
 - Anotações com autor, data/hora automáticas, edição e exclusão sem sobrescrever o histórico anterior.
