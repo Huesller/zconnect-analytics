@@ -540,6 +540,101 @@ function readEvents_() {
   return { ok: true, events: rows };
 }
 
+function parseRankingProducts_(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function rankingProductCode_(value) {
+  return String(value || "").trim().slice(0, 80);
+}
+
+function incrementRankingMetric_(map, code) {
+  const normalizedCode = rankingProductCode_(code);
+  if (!normalizedCode) return;
+  map[normalizedCode] = (map[normalizedCode] || 0) + 1;
+}
+
+function sortRankingCodes_(map) {
+  return Object.keys(map).sort(function(a, b) {
+    return map[b] - map[a] || a.localeCompare(b, "pt-BR");
+  });
+}
+
+function readPublicProductRankings_(params) {
+  const requestedDays = Math.floor(number_(params && params.days || 30));
+  const windowDays = Math.max(7, Math.min(90, requestedDays || 30));
+  const cache = CacheService.getScriptCache();
+  const cacheKey = "public-product-rankings-v1-" + windowDays;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    try { return JSON.parse(cached); } catch (err) { /* Rebuild below. */ }
+  }
+
+  const sheet = getEventsSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const indexes = {
+    timestamp: headers.indexOf("timestamp"),
+    createdAt: headers.indexOf("createdAt"),
+    event: headers.indexOf("event"),
+    productCode: headers.indexOf("productCode"),
+    products: headers.indexOf("products")
+  };
+  const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+  const popular = {};
+  const added = {};
+  const quoted = {};
+
+  values.slice(1).forEach(function(row) {
+    const rawDate = indexes.timestamp >= 0 && row[indexes.timestamp]
+      ? row[indexes.timestamp]
+      : (indexes.createdAt >= 0 ? row[indexes.createdAt] : "");
+    const timestamp = rawDate instanceof Date ? rawDate.getTime() : new Date(rawDate || 0).getTime();
+    if (!timestamp || timestamp < cutoff) return;
+
+    const eventName = normalizeEvent_(indexes.event >= 0 ? row[indexes.event] : "");
+    const directCode = rankingProductCode_(indexes.productCode >= 0 ? row[indexes.productCode] : "");
+    if (eventName === "product_open") incrementRankingMetric_(popular, directCode);
+    if (eventName === "add_to_cart") incrementRankingMetric_(added, directCode);
+
+    if (eventName === "whatsapp_quote") {
+      const products = parseRankingProducts_(indexes.products >= 0 ? row[indexes.products] : "");
+      const quoteCodes = {};
+      products.forEach(function(product) {
+        const code = rankingProductCode_(product && (product.productCode || product.code || product.codigo));
+        if (code) quoteCodes[code] = true;
+      });
+      if (!Object.keys(quoteCodes).length && directCode) {
+        directCode.split(",").forEach(function(code) {
+          const normalizedCode = rankingProductCode_(code);
+          if (normalizedCode) quoteCodes[normalizedCode] = true;
+        });
+      }
+      Object.keys(quoteCodes).forEach(function(code) { incrementRankingMetric_(quoted, code); });
+    }
+  });
+
+  const result = {
+    ok: true,
+    windowDays: windowDays,
+    generatedAt: new Date().toISOString(),
+    rankings: {
+      popular: sortRankingCodes_(popular),
+      added: sortRankingCodes_(added),
+      quoted: sortRankingCodes_(quoted)
+    }
+  };
+  cache.put(cacheKey, JSON.stringify(result), 900);
+  return result;
+}
+
 function getSummary_() {
   const events = readEvents_().events;
   const companies = {};
@@ -1882,6 +1977,7 @@ function doGet(e) {
 
   if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
   if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
+  if (action === "product_rankings_public") return jsonOutput(readPublicProductRankings_(params));
   if (action === "track") return jsonOutput(appendEvent_(params));
 
   const adminReads = {
@@ -1911,5 +2007,5 @@ function doGet(e) {
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.1 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.2 + Rankings Publicos V1" });
 }
