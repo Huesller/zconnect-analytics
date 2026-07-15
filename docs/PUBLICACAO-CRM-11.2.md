@@ -1,4 +1,4 @@
-# Publicação do CRM 11.2
+# Publicação do CRM 11.2.1
 
 ## 1. Atualize o Apps Script
 
@@ -11,7 +11,7 @@
 5. Em **Implantar > Gerenciar implantações**, edite a implantação, selecione **Nova versão** e publique.
 6. Mantenha/copie a URL final terminada em `/exec`.
 
-A publicação de uma **nova versão do Apps Script é obrigatória** no CRM 11.2 para habilitar mesclagem manual completa e exclusão por empresa.
+A publicação de uma **nova versão do Apps Script é obrigatória** no CRM 11.2.1 para habilitar mesclagem manual completa, exclusão por empresa e retentativa automática quando a planilha estiver ocupada.
 
 ## 2. Gere os cinco logins
 
@@ -64,4 +64,3 @@ Publique o Catálogo. Ao final do build, o snapshot de estoque será enviado aut
 11. Confira a data do snapshot em **Catálogo e estoque**.
 
 As políticas de preço, IPI, desconto-base, condição especial e limites comerciais permanecem inalteradas.
-

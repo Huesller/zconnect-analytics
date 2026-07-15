@@ -1,8 +1,8 @@
 {
   "project": "Z Connect",
-  "version": "11.2.0",
-  "release": "FUNIL-CARRINHOS-GOVERNANCA-EMPRESAS",
-  "build": "2026-07-14",
+  "version": "12.0.0",
+  "release": "CRM-OPERACIONAL-CLIENTE-360",
+  "build": "2026-07-15",
   "environment": "production",
   "notes": [
     "Login real no servidor com cookie HttpOnly e APIs protegidas",
@@ -12,7 +12,14 @@
     "Limpeza seletiva com backup e restauração automática dos filtros",
     "Funil compacto com navegação por etapa e sete colunas visíveis",
     "Histórico permanente de interesse dos carrinhos e acompanhamento por WhatsApp",
-    "Mesclagem manual e exclusão por empresa, com escopo e backup por área"
+    "Mesclagem manual e exclusão por empresa, com escopo e backup por área",
+    "Retentativa automática quando catálogo ou reservas estiverem gravando na planilha",
+    "Cadastro manual de clientes vinculado ao vendedor e inclusão direta no funil",
+    "Anotações permanentes com autor, data, horário, edição e exclusão",
+    "Ações rápidas para editar, finalizar ou excluir oportunidades e tarefas",
+    "Carrinhos e atividades agrupados por data e situação comercial",
+    "Mensagem de recuperação com produtos, quantidades e valor aproximado",
+    "Campo monetário livre durante a digitação e formatação somente ao sair"
   ],
   "module": "Analytics"
 }

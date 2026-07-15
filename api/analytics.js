@@ -43,19 +43,33 @@ async function readUpstream(apiUrl, adminToken, action, signal) {
 async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, signal) {
   if (isAdmin(profile)) return true;
   const allowed = allowedConsultants(profile);
-  if (action === "complete_crm_task") {
+  if (["complete_crm_task", "cancel_crm_task"].includes(action)) {
     const data = await readUpstream(apiUrl, adminToken, "crm_tasks", signal);
     const task = (data.tasks || []).find((item) => String(item.taskId || item.id) === String(body.taskId || ""));
     return Boolean(task && allowed.has(rowConsultant(task)));
   }
-  if (!["upsert_crm_client", "upsert_crm_task", "record_crm_activity"].includes(action)) return true;
+  if (["update_crm_activity", "delete_crm_activity"].includes(action)) {
+    const data = await readUpstream(apiUrl, adminToken, "crm_activities", signal);
+    const activity = (data.activities || []).find((item) => String(item.activityId || item.id) === String(body.activityId || ""));
+    return Boolean(activity && allowed.has(rowConsultant(activity)));
+  }
+  if (!["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client"].includes(action)) return true;
   const requestedCompany = normalizeCompanyKey(body.companyKey || body.companyName);
   if (!requestedCompany) return false;
-  const data = await readUpstream(apiUrl, adminToken, "events", signal);
-  return (data.events || []).some((event) => (
+  const [eventsData, clientsData] = await Promise.all([
+    readUpstream(apiUrl, adminToken, "events", signal),
+    readUpstream(apiUrl, adminToken, "crm_clients", signal)
+  ]);
+  const ownedClient = (clientsData.clients || []).some((client) => (
+    normalizeCompanyKey(client.companyKey || client.companyName) === requestedCompany && allowed.has(rowConsultant(client))
+  ));
+  if (ownedClient) return true;
+  const ownedEvent = (eventsData.events || []).some((event) => (
     allowed.has(rowConsultant(event))
     && normalizeCompanyKey(event.companyName || event.empresa || event.company) === requestedCompany
   ));
+  if (ownedEvent) return true;
+  return action === "upsert_crm_client" && body.createIfMissing === true;
 }
 
 function scopePayload(action, data, profile) {
@@ -86,7 +100,7 @@ export default async function handler(req, res) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 25000);
+    const timeout = setTimeout(() => controller.abort(), 55000);
     let response;
     let action = "";
     if (req.method === "GET") {
@@ -108,7 +122,7 @@ export default async function handler(req, res) {
         const canWrite = await canWriteScopedRecord(apiUrl, adminToken, action, body, profile, controller.signal);
         if (!canWrite) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "client_outside_user_scope" }); }
         const primaryConsultant = [...allowedConsultants(profile)][0] || profile.username;
-        if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity"].includes(action)) {
+        if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client"].includes(action)) {
           body.owner = primaryConsultant;
           body.consultant = primaryConsultant;
         }

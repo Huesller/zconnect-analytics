@@ -10,6 +10,7 @@ const CATALOG_PRODUCTS_SHEET = "CATALOG_PRODUCTS";
 const ACTIVE_RESERVATION_TTL_MS = 20 * 60 * 1000;
 const QUOTED_RESERVATION_TTL_MS = 60 * 60 * 1000;
 const RESERVATION_HISTORY_RETENTION_MS = 48 * 60 * 60 * 1000;
+const ADMIN_LOCK_WAIT_MS = 7000;
 
 const OFFER_HEADERS = [
   "createdAt",
@@ -84,7 +85,11 @@ const RESERVATION_HEADERS = [
 const CRM_CLIENT_HEADERS = [
   "companyKey",
   "companyName",
+  "contactName",
   "phone",
+  "email",
+  "city",
+  "segment",
   "status",
   "owner",
   "nextContactAt",
@@ -93,6 +98,8 @@ const CRM_CLIENT_HEADERS = [
   "expectedValue",
   "lastOutcome",
   "lostReason",
+  "actionDoneAt",
+  "archivedAt",
   "createdAt",
   "updatedAt"
 ];
@@ -121,7 +128,9 @@ const CRM_ACTIVITY_HEADERS = [
   "reason",
   "note",
   "owner",
-  "createdAt"
+  "createdAt",
+  "updatedAt",
+  "deletedAt"
 ];
 
 const CRM_SETTING_HEADERS = ["key", "value", "updatedAt"];
@@ -1014,7 +1023,9 @@ function appendCrmActivity_(record) {
     reason: String(record.reason || "").trim().slice(0, 180),
     note: String(record.note || "").trim().slice(0, 1000),
     owner: String(record.owner || "").trim().slice(0, 80),
-    createdAt: record.createdAt || now
+    createdAt: record.createdAt || now,
+    updatedAt: record.updatedAt || "",
+    deletedAt: record.deletedAt || ""
   };
   const headers = getHeaders_(sheet);
   sheet.appendRow(headers.map(function(header) { return normalized[header] !== undefined ? normalized[header] : ""; }));
@@ -1042,7 +1053,7 @@ function readCrmTasks_() {
 
 function readCrmActivities_() {
   const activities = readStructuredRows_(getCrmActivitiesSheet_(), "activity")
-    .filter(function(item) { return String(item.activityId || "").trim(); })
+    .filter(function(item) { return String(item.activityId || "").trim() && !String(item.deletedAt || "").trim(); })
     .sort(function(a, b) { return reservationDate_(b.createdAt).getTime() - reservationDate_(a.createdAt).getTime(); })
     .slice(0, 5000);
   return { ok: true, activities: activities };
@@ -1062,7 +1073,11 @@ function upsertCrmClient_(data) {
 
   const allowedStatuses = ["new", "contact", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
+  const contactName = String(data.contactName || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const phone = String(data.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
+  const email = String(data.email || "").trim().toLowerCase().slice(0, 180);
+  const city = String(data.city || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const segment = String(data.segment || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const ownerRaw = String(data.owner || data.consultant || "").trim();
   const owner = ownerRaw ? normalizeConsultor_(ownerRaw).slice(0, 80) : "";
   const nextContactAt = String(data.nextContactAt || "").trim().slice(0, 40);
@@ -1087,11 +1102,13 @@ function upsertCrmClient_(data) {
     const keyIndex = headers.indexOf("companyKey");
     let rowNumber = 0;
     let previousStatus = "";
+    let previousRecord = {};
     for (let index = 1; index < values.length; index++) {
       if (normalizeCompanyKey_(values[index][keyIndex]) === companyKey) {
         rowNumber = index + 1;
         const statusIndex = headers.indexOf("status");
         previousStatus = statusIndex >= 0 ? String(values[index][statusIndex] || "") : "";
+        headers.forEach(function(header, columnIndex) { previousRecord[header] = values[index][columnIndex]; });
         break;
       }
     }
@@ -1102,7 +1119,11 @@ function upsertCrmClient_(data) {
     const record = {
       companyKey: companyKey,
       companyName: companyName,
+      contactName: contactName,
       phone: phone,
+      email: email,
+      city: city,
+      segment: segment,
       status: status,
       owner: owner,
       nextContactAt: nextContactAt,
@@ -1111,6 +1132,8 @@ function upsertCrmClient_(data) {
       expectedValue: expectedValue,
       lastOutcome: lastOutcome,
       lostReason: lostReason,
+      actionDoneAt: data.actionDoneAt !== undefined ? String(data.actionDoneAt || "") : (previousRecord.actionDoneAt || ""),
+      archivedAt: data.archivedAt !== undefined ? String(data.archivedAt || "") : (previousRecord.archivedAt || ""),
       createdAt: existingCreatedAt || now,
       updatedAt: now
     };
@@ -1197,6 +1220,24 @@ function completeCrmTask_(data) {
   return { ok: false, error: "task_not_found" };
 }
 
+function cancelCrmTask_(data) {
+  const taskId = String(data.taskId || "").trim();
+  if (!taskId) return { ok: false, error: "invalid_task" };
+  const sheet = getCrmTasksSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const idIndex = headers.indexOf("taskId");
+  const statusIndex = headers.indexOf("status");
+  const completedIndex = headers.indexOf("completedAt");
+  for (let index = 1; index < values.length; index++) {
+    if (String(values[index][idIndex] || "") !== taskId) continue;
+    sheet.getRange(index + 1, statusIndex + 1).setValue("cancelled");
+    if (completedIndex >= 0) sheet.getRange(index + 1, completedIndex + 1).setValue(new Date());
+    return { ok: true, taskId: taskId };
+  }
+  return { ok: false, error: "task_not_found" };
+}
+
 function recordCrmActivity_(data) {
   const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
@@ -1213,6 +1254,61 @@ function recordCrmActivity_(data) {
     owner: data.owner
   });
   return { ok: true, activity: activity };
+}
+
+function updateCrmActivity_(data) {
+  const activityId = String(data.activityId || "").trim();
+  if (!activityId) return { ok: false, error: "invalid_activity" };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "activity_busy" }; }
+  try {
+    const sheet = getCrmActivitiesSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const idIndex = headers.indexOf("activityId");
+    for (let index = 1; index < values.length; index++) {
+      if (String(values[index][idIndex] || "") !== activityId) continue;
+      const record = {};
+      headers.forEach(function(header, columnIndex) { record[header] = values[index][columnIndex]; });
+      record.type = String(data.type || record.type || "note").trim().slice(0, 40);
+      record.note = String(data.note || "").trim().slice(0, 1000);
+      record.updatedAt = new Date();
+      const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+      sheet.getRange(index + 1, 1, 1, headers.length).setValues([row]);
+      return { ok: true, activity: record };
+    }
+    return { ok: false, error: "activity_not_found" };
+  } finally { lock.releaseLock(); }
+}
+
+function deleteCrmActivity_(data) {
+  const activityId = String(data.activityId || "").trim();
+  if (!activityId) return { ok: false, error: "invalid_activity" };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "activity_busy" }; }
+  try {
+    const sheet = getCrmActivitiesSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const idIndex = headers.indexOf("activityId");
+    const deletedIndex = headers.indexOf("deletedAt");
+    for (let index = 1; index < values.length; index++) {
+      if (String(values[index][idIndex] || "") !== activityId) continue;
+      sheet.getRange(index + 1, deletedIndex + 1).setValue(new Date());
+      return { ok: true, activityId: activityId };
+    }
+    return { ok: false, error: "activity_not_found" };
+  } finally { lock.releaseLock(); }
+}
+
+function completeCrmAction_(data) {
+  data.actionDoneAt = new Date();
+  return upsertCrmClient_(data);
+}
+
+function archiveCrmClient_(data) {
+  data.archivedAt = new Date();
+  return upsertCrmClient_(data);
 }
 
 function updateCrmSettings_(data) {
@@ -1420,7 +1516,7 @@ function cleanupSelectedCompanies_(data) {
 
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
+    lock.waitLock(ADMIN_LOCK_WAIT_MS);
   } catch (err) {
     return { ok: false, error: "cleanup_busy" };
   }
@@ -1476,7 +1572,7 @@ function mergeCompanies_(data) {
 
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
+    lock.waitLock(ADMIN_LOCK_WAIT_MS);
   } catch (err) {
     return { ok: false, error: "merge_busy" };
   }
@@ -1584,7 +1680,7 @@ function deleteCompanyData_(data) {
 
   const lock = LockService.getScriptLock();
   try {
-    lock.waitLock(20000);
+    lock.waitLock(ADMIN_LOCK_WAIT_MS);
   } catch (err) {
     return { ok: false, error: "delete_busy" };
   }
@@ -1668,7 +1764,12 @@ function doPost(e) {
     upsert_crm_client: true,
     upsert_crm_task: true,
     complete_crm_task: true,
+    cancel_crm_task: true,
+    complete_crm_action: true,
+    archive_crm_client: true,
     record_crm_activity: true,
+    update_crm_activity: true,
+    delete_crm_activity: true,
     update_crm_settings: true,
     cleanup_selected_companies: true,
     merge_companies: true,
@@ -1682,7 +1783,12 @@ function doPost(e) {
   if (action === "upsert_crm_client") return jsonOutput(upsertCrmClient_(data));
   if (action === "upsert_crm_task") return jsonOutput(upsertCrmTask_(data));
   if (action === "complete_crm_task") return jsonOutput(completeCrmTask_(data));
+  if (action === "cancel_crm_task") return jsonOutput(cancelCrmTask_(data));
+  if (action === "complete_crm_action") return jsonOutput(completeCrmAction_(data));
+  if (action === "archive_crm_client") return jsonOutput(archiveCrmClient_(data));
   if (action === "record_crm_activity") return jsonOutput(recordCrmActivity_(data));
+  if (action === "update_crm_activity") return jsonOutput(updateCrmActivity_(data));
+  if (action === "delete_crm_activity") return jsonOutput(deleteCrmActivity_(data));
   if (action === "update_crm_settings") return jsonOutput(updateCrmSettings_(data));
   if (action === "cleanup_selected_companies") return jsonOutput(cleanupSelectedCompanies_(data));
   if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
@@ -1727,5 +1833,5 @@ function doGet(e) {
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));
 
-  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 11.2 + Reservas V1" });
+  return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.0 + Reservas V1" });
 }

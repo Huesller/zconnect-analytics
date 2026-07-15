@@ -1,13 +1,22 @@
-# Z Connect Analytics CRM 11.2
+# Z Connect Analytics CRM 12.0
 
 Painel de inteligência comercial com login real no servidor, fila diária, funil Kanban, Cliente 360, tarefas, metas, resultados, reservas e monitor do catálogo. Nenhuma regra de preço ou desconto foi alterada.
 
 ## O que entrou nesta versão
 
+- Cadastro manual de clientes, edição, exclusão controlada e inclusão direta no funil, respeitando a carteira de cada vendedor.
+- Cliente 360 ampliado com contato, e-mail, cidade, segmento, resumo fixo e anotações cronológicas independentes.
+- Anotações com autor, data/hora automáticas, edição e exclusão sem sobrescrever o histórico anterior.
+- Fila **Ações agora** com botões para editar, finalizar ou excluir a ação/tarefa.
+- Carrinhos separados por pendente, cotação enviada, pedido fechado e perdido, com grupos recolhíveis por data.
+- Atividades e histórico do cliente organizados em datas recolhíveis.
+- Mensagem de recuperação de carrinho com peças, quantidades e valor aproximado, pronta para copiar ou abrir no WhatsApp.
+- Campos monetários livres durante a digitação, formatados em real somente ao finalizar o preenchimento.
 - Funil compacto com as sete etapas visíveis em telas desktop e barra de navegação direta para telas menores.
 - Carrinhos com histórico permanente de interesse após o fim da reserva, filtro de clientes que precisam de contato e mensagem pronta para WhatsApp.
 - Cliente 360 com histórico dos itens adicionados, distinção entre reserva ativa e expirada e acompanhamento comercial em um clique.
 - Administração manual de empresas: escolha do nome principal, mesclagem livre de variações e exclusão seletiva por empresa e por tipo de dado, sempre com backup.
+- Operações administrativas aguardam e tentam novamente quando a planilha está ocupada por catálogo ou reservas; o código técnico `merge_busy` não é mais exibido ao usuário.
 - Login server-side: senha não vai mais para o JavaScript público; sessão em cookie `HttpOnly`, `Secure` e `SameSite=Strict`.
 - Logins individuais para Administrador, Huesller, Ney, Junior e Francisco. O servidor entrega a cada usuário somente os clientes originados pelos seus próprios links; o administrador continua vendo tudo.
 - Cliente 360 dividido em Resumo, Interesses, Carrinho e cotações, Tarefas e Histórico.
@@ -94,7 +103,7 @@ Se o projeto está ligado ao GitHub:
 
 ```bash
 git add .
-git commit -m "Analytics CRM 11.2"
+git commit -m "Analytics CRM 12.0"
 git push origin main
 ```
 
@@ -103,8 +112,8 @@ Ou envie esta pasta ao mesmo projeto da Vercel. Após o deploy, use `Ctrl + F5`,
 ## Ordem segura de atualização
 
 1. Configure as variáveis na Vercel.
-2. Publique o frontend CRM 11.2.
-3. Configure as propriedades e publique o Apps Script CRM 11.2.
+2. Publique o frontend CRM 12.0.
+3. Configure as propriedades e publique o Apps Script CRM 12.0.
 4. Se o URL do Apps Script mudou, atualize `ANALYTICS_API_URL` e faça novo deploy na Vercel.
 5. Conecte o snapshot do catálogo seguindo `docs/INTEGRACAO-CATALOGO-CRM11.md`.
 
