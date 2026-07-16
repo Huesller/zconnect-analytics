@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.5.1",
-  "release": "FUNIL-COMERCIAL-TAREFAS-RAPIDAS",
+  "version": "12.5.3",
+  "release": "CLIENTE-360-SINCRONIZACAO-E-RECENCIA",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -41,7 +41,11 @@
     "Registro de cotação enviada move automaticamente o cliente para Cotação enviada",
     "Cartões exibem tentativas, último contato, próxima ação e prioridade por prazo",
     "Motivo obrigatório ao mover uma oportunidade para Perdido",
-    "Tarefas rápidas com ações comerciais predefinidas e opção de texto livre"
+    "Tarefas rápidas com ações comerciais predefinidas e opção de texto livre",
+    "Anotações e tarefas recém-salvas permanecem visíveis durante a sincronização automática",
+    "Atualização periódica pausada enquanto o Cliente 360 está aberto",
+    "Situação comercial renomeada para Recência da compra, sem confundir com a etapa do funil",
+    "Classificações de compra reescritas com faixas de dias claras"
   ],
   "module": "Analytics"
 }

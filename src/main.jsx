@@ -1958,6 +1958,14 @@ function normalizeCrmActivity(activity) {
   };
 }
 
+function mergeLocalCrmRows(remoteRows = [], localRows = [], idKeys = []) {
+  const rowId = (row) => idKeys.map((key) => String(row?.[key] || "")).find(Boolean) || "";
+  const merged = new Map();
+  remoteRows.forEach((row) => { const id = rowId(row); if (id) merged.set(id, row); });
+  localRows.forEach((row) => { const id = rowId(row); if (id) merged.set(id, row); });
+  return [...merged.values()];
+}
+
 const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success", "quote_sent", "negotiation_note", "after_sales_note"];
 
 function purchaseDays(client = {}) {
@@ -1968,11 +1976,11 @@ function purchaseDays(client = {}) {
 
 function commercialHealth(client = {}) {
   const days = purchaseDays(client);
-  if (!client.lastPurchaseAt && !days) return { key: "no_history", label: "Sem histórico" };
-  if (days <= 30) return { key: "active", label: "Ativo" };
-  if (days <= 60) return { key: "attention", label: "Atenção" };
-  if (days <= 120) return { key: "risk", label: "Em risco" };
-  return { key: "inactive", label: "Inativo" };
+  if (!client.lastPurchaseAt && !days) return { key: "no_history", label: "Sem histórico de compra" };
+  if (days <= 30) return { key: "active", label: "Comprou recentemente" };
+  if (days <= 60) return { key: "attention", label: "31–60 dias sem comprar" };
+  if (days <= 120) return { key: "risk", label: "61–120 dias sem comprar" };
+  return { key: "inactive", label: "Sem compra há +120 dias" };
 }
 
 function noteTypeLabel(type) {
@@ -2581,6 +2589,9 @@ function App() {
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
   const [actionFilter, setActionFilter] = useState("all");
+  const clientModalOpenRef = useRef(false);
+
+  useEffect(() => { clientModalOpenRef.current = Boolean(selectedClient); }, [selectedClient]);
 
   useEffect(() => {
     let active = true;
@@ -2616,8 +2627,8 @@ function App() {
       setEvents(data);
       setReservations(activeReservations);
       setCrmClients(savedCrmClients);
-      setCrmTasks(savedTasks);
-      setCrmActivities(savedActivities);
+      setCrmTasks((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedTasks, current, ["taskId", "id"]) : savedTasks);
+      setCrmActivities((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedActivities, current, ["activityId", "id"]) : savedActivities);
       setCrmSettings(savedSettings);
       setCatalogHealth(savedCatalogHealth);
       setLastUpdatedAt(new Date());
@@ -2642,7 +2653,7 @@ function App() {
     if (authStatus !== "authenticated") return undefined;
 
     load();
-    const timer = window.setInterval(load, 30000);
+    const timer = window.setInterval(() => { if (!clientModalOpenRef.current) load({ silent: true }); }, 30000);
     return () => window.clearInterval(timer);
   }, [authStatus]);
 
@@ -4378,11 +4389,11 @@ function CrmNotesCenter({ activities = [], clients = [], onOpen, onUpdate }) {
 
   function exportNotes() {
     const columns = [
-      { key: "code", label: "Código" }, { key: "tax", label: "CPF/CNPJ" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "city", label: "Cidade/UF" }, { key: "owner", label: "Responsável" }, { key: "type", label: "Tipo" }, { key: "note", label: "Anotação" }, { key: "created", label: "Registrada em" }, { key: "nextAction", label: "Próxima ação" }, { key: "nextDate", label: "Data da ação" }, { key: "actionStatus", label: "Status da ação" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Situação comercial" }
+      { key: "code", label: "Código" }, { key: "tax", label: "CPF/CNPJ" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "city", label: "Cidade/UF" }, { key: "owner", label: "Responsável" }, { key: "type", label: "Tipo" }, { key: "note", label: "Anotação" }, { key: "created", label: "Registrada em" }, { key: "nextAction", label: "Próxima ação" }, { key: "nextDate", label: "Data da ação" }, { key: "actionStatus", label: "Status da ação" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" }
     ];
     const rows = visible.map(({ activity, client }) => ({ code: client.customerCode || "", tax: client.taxId || "", company: client.company || activity.companyName, contact: client.contactName || "", phone: client.phone || "", city: [client.city, client.state].filter(Boolean).join(" / "), owner: activity.owner || client.owner || "", type: noteTypeLabel(activity.type), note: activity.note, created: activity.createdAtLabel, nextAction: activity.nextAction || "", nextDate: activity.nextActionAt ? dateOnly(activity.nextActionAt) : "", actionStatus: activity.nextAction ? (activity.actionStatus === "done" ? "Concluída" : "Pendente") : "", lastPurchase: client.lastPurchaseAt ? dateOnly(client.lastPurchaseAt) : "", days: purchaseDays(client), health: commercialHealth(client).label }));
     const clientsWithNotes = [...new Map(visible.map(({ client }) => [client.companyKey, client])).values()];
-    const clientColumns = [{ key: "code", label: "Código" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "owner", label: "Responsável" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Situação" }, { key: "notes", label: "Qtd. anotações" }];
+    const clientColumns = [{ key: "code", label: "Código" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "owner", label: "Responsável" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" }, { key: "notes", label: "Qtd. anotações" }];
     const clientRows = clientsWithNotes.map((client) => ({ code: client.customerCode || "", company: client.company, contact: client.contactName || "", phone: client.phone || "", owner: client.owner || "", lastPurchase: client.lastPurchaseAt ? dateOnly(client.lastPurchaseAt) : "", days: purchaseDays(client), health: commercialHealth(client).label, notes: notes.filter((item) => item.client.companyKey === client.companyKey).length }));
     const noteSheetRows = tableRows("Anotações comerciais", columns, rows);
     const clientSheetRows = tableRows("Clientes com anotações", clientColumns, clientRows);
@@ -4418,13 +4429,13 @@ function ClientCrmTable({ rows = [], activities = [], onOpen }) {
             <option value="all">Todas</option>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="active">Cliente ativo</option><option value="cold">Frio</option>
           </select>
         </label>
-        <label><Filter size={14}/> Situação<select value={health} onChange={(event) => setHealth(event.target.value)}><option value="all">Todas</option><option value="active">Ativos</option><option value="attention">Atenção</option><option value="risk">Em risco</option><option value="inactive">Inativos</option><option value="no_history">Sem histórico</option></select></label>
+        <label><Filter size={14}/> Recência da compra<select value={health} onChange={(event) => setHealth(event.target.value)}><option value="all">Todas</option><option value="active">Comprou recentemente</option><option value="attention">31–60 dias</option><option value="risk">61–120 dias</option><option value="inactive">Mais de 120 dias</option><option value="no_history">Sem histórico de compra</option></select></label>
         <label><TrendingUp size={14}/> Ordenar<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="company">Nome</option><option value="recent">Compra mais recente</option><option value="days_desc">Mais dias sem comprar</option><option value="total_desc">Maior total comprado</option></select></label>
         <label className="check-tool"><input type="checkbox" checked={notesOnly} onChange={(event) => setNotesOnly(event.target.checked)}/> Com anotações</label>
       </div>
       <div className="crm-table-wrap">
         <table className="crm-table">
-          <thead><tr><th>Cliente</th><th>Etapa</th><th>Responsável</th><th>Última compra</th><th>Dias sem comprar</th><th>Situação</th><th>Total comprado</th><th>Próximo contato</th></tr></thead>
+          <thead><tr><th>Cliente</th><th>Etapa</th><th>Responsável</th><th>Última compra</th><th>Dias sem comprar</th><th>Recência da compra</th><th>Total comprado</th><th>Próximo contato</th></tr></thead>
           <tbody>
             {visibleRows.map((row) => (
               <tr key={row.id} tabIndex="0" onClick={() => onOpen(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(row); }}>

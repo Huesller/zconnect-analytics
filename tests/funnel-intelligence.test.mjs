@@ -27,3 +27,15 @@ test("tarefas comerciais possuem atalhos e opção livre", () => {
   for (const title of ["Ligar", "Retornar ligação", "Mensagem WhatsApp", "Retorno de cotação", "Enviar catálogo", "Agendar visita", "Acompanhar pedido"]) assert.match(main, new RegExp(title));
   assert.match(main, /Outra tarefa/);
 });
+
+test("Cliente 360 protege alterações locais durante sincronização", () => {
+  assert.match(main, /mergeLocalCrmRows/);
+  assert.match(main, /clientModalOpenRef/);
+  assert.match(main, /if \(!clientModalOpenRef\.current\) load\(\{ silent: true \}\)/);
+});
+
+test("recência de compra não é apresentada como status do cliente", () => {
+  assert.match(main, /Recência da compra/);
+  assert.match(main, /Sem compra há \+120 dias/);
+  assert.doesNotMatch(main, /return \{ key: "inactive", label: "Inativo" \}/);
+});
