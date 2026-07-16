@@ -1817,7 +1817,7 @@ input:focus {
 .pipeline-stage-nav span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pipeline-stage-nav b { display: grid; flex: 0 0 19px; height: 19px; place-items: center; border-radius: 10px; background: #ece9e4; color: #191b1f; font-size: 7px; }
 .pipeline-stage-nav button.active b { background: #d7192d; color: #fff; }
-.pipeline-board { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; overflow-x: auto; padding-bottom: 10px; scroll-behavior: smooth; }
+.pipeline-board { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; overflow-x: auto; padding-bottom: 10px; scroll-behavior: smooth; }
 .pipeline-column { min-width: 0; min-height: 460px; border: 1px solid var(--line); background: #eeece7; scroll-margin-inline: 12px; }
 .pipeline-column > header { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 4px 6px; border-top: 3px solid #74716c; padding: 9px 8px; background: #fff; }
 .pipeline-column.stage-negotiation > header, .pipeline-column.stage-quoted > header { border-top-color: #d7192d; }
@@ -1832,6 +1832,14 @@ input:focus {
 .pipeline-card strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .pipeline-card span, .pipeline-card small { color: #77736d; font-size: 9px; }
 .pipeline-card b { color: #d7192d; font-size: 10px; }
+.pipeline-card em { overflow: hidden; color: #55514b; font-size: 8px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-card mark.next-action { display: block; overflow: hidden; border-radius: 3px; padding: 5px 6px; background: #e7f1ff; color: #14538d; font-size: 8px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.pipeline-card mark.next-action.overdue { background: #ffe4e7; color: #a61123; }
+.pipeline-card mark.next-action.today { background: #fff0cc; color: #825400; }
+.pipeline-card mark.next-action.no-action { background: #eceae6; color: #77736d; }
+.pipeline-card.card-overdue { border-left-color: #d7192d; }
+.pipeline-card.card-today { border-left-color: #d88900; }
+.pipeline-card.card-scheduled { border-left-color: #2377bd; }
 .pipeline-empty { padding: 20px 8px; color: #99948c; font-size: 9px; text-align: center; }
 
 .demand-stock-table { overflow-x: auto; }
@@ -1881,7 +1889,7 @@ input:focus {
 @media (max-width: 960px) {
   .command-grid, .catalog-grid { grid-template-columns: 1fr; }
   .pipeline-stage-nav { overflow-x: auto; grid-template-columns: repeat(7, 150px); }
-  .pipeline-board { grid-template-columns: repeat(7, 165px); }
+  .pipeline-board { grid-template-columns: repeat(8, 165px); }
   .task-form, .outcome-card form { grid-template-columns: 1fr 1fr; }
 }
 

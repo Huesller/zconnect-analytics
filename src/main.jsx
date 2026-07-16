@@ -66,8 +66,9 @@ const EVENT_LABELS = {
 };
 
 const PIPELINE_STAGES = [
-  { key: "new", label: "Novo interesse" },
+  { key: "new", label: "Novo cliente" },
   { key: "contact", label: "Em contato" },
+  { key: "qualified", label: "Oportunidade identificada" },
   { key: "quoted", label: "Cotação enviada" },
   { key: "negotiation", label: "Negociação" },
   { key: "waiting", label: "Aguardando cliente" },
@@ -76,6 +77,13 @@ const PIPELINE_STAGES = [
 ];
 
 const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desistiu", "Comprou de outro fornecedor", "Outro"];
+const CONTACT_ACTIVITY_TYPES = ["call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success"];
+const CONTACT_ACTIVITY_OPTIONS = [
+  ["call_no_answer", "Ligação sem resposta"], ["whatsapp_sent", "WhatsApp enviado"],
+  ["email_sent", "E-mail enviado"], ["invalid_phone", "Telefone inválido"],
+  ["contact_success", "Contato realizado"], ["quote_sent", "Cotação enviada"],
+  ["negotiation_note", "Negociação"], ["after_sales_note", "Pós-venda"], ["note", "Anotação geral"]
+];
 
 const EVENT_HISTORY_COLUMNS = [
   { key: "dateTime", label: "Data/hora", className: "col-time" },
@@ -288,8 +296,9 @@ function duplicateCompanyKey(value) {
 
 function crmStatusLabel(status) {
   const labels = {
-    new: "Novo",
+    new: "Novo cliente",
     contact: "Em contato",
+    qualified: "Oportunidade identificada",
     quoted: "Cotação enviada",
     negotiation: "Negociação",
     waiting: "Aguardando cliente",
@@ -1948,7 +1957,7 @@ function normalizeCrmActivity(activity) {
   };
 }
 
-const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "negotiation_note", "after_sales_note"];
+const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success", "quote_sent", "negotiation_note", "after_sales_note"];
 
 function purchaseDays(client = {}) {
   const purchaseDate = new Date(client.lastPurchaseAt || "");
@@ -1966,7 +1975,8 @@ function commercialHealth(client = {}) {
 }
 
 function noteTypeLabel(type) {
-  return type === "contact_note" ? "Contato realizado" : type === "negotiation_note" ? "Negociação" : type === "after_sales_note" ? "Pós-venda" : "Anotação geral";
+  const labels = Object.fromEntries(CONTACT_ACTIVITY_OPTIONS);
+  return labels[type] || (type === "contact_note" ? "Contato realizado" : "Anotação geral");
 }
 
 function clientProfilePayload(client = {}, overrides = {}) {
@@ -3192,7 +3202,10 @@ function App() {
     const result = await postAnalyticsAction("record_crm_activity", { companyKey: client.companyKey, companyName: client.company, owner: client.owner, type: note.type || "contact_note", note: note.note, nextAction: note.nextAction || "", nextActionAt: note.nextActionAt || "", actionStatus: note.actionStatus || (note.nextAction ? "pending" : "") });
     const activity = normalizeCrmActivity(result.activity);
     setCrmActivities((current) => [activity, ...current]);
-    showToast("Anotação adicionada ao histórico.");
+    const currentStatus = client.statusKey || client.status || "new";
+    const automaticStatus = note.type === "quote_sent" ? "quoted" : (CONTACT_ACTIVITY_TYPES.includes(note.type) && currentStatus === "new" ? "contact" : "");
+    if (automaticStatus) await saveClientProfile(clientProfilePayload(client, { status: automaticStatus, activityNote: `Movido automaticamente após: ${noteTypeLabel(note.type)}` }));
+    showToast(automaticStatus ? `Atividade registrada e cliente movido para ${crmStatusLabel(automaticStatus)}.` : "Atividade adicionada ao histórico.");
     return activity;
   }
 
@@ -3236,10 +3249,16 @@ function App() {
   }
 
   async function moveClientStage(client, status) {
+    let lostReason = client.lostReason || "";
+    if (status === "lost" && !lostReason) {
+      lostReason = window.prompt(`Informe o motivo da perda:\n\n${LOST_REASONS.join(" · ")}`, "")?.trim() || "";
+      if (!lostReason) { showToast("Informe o motivo antes de mover para Perdido.", "error"); return false; }
+    }
     await saveClientProfile(clientProfilePayload(client, {
       status,
-      lostReason: status === "lost" ? client.lostReason || "Outro" : ""
+      lostReason: status === "lost" ? lostReason : ""
     }));
+    return true;
   }
 
   async function markCartBusinessStatus(row, status) {
@@ -3742,7 +3761,7 @@ function App() {
             { icon: <UserCheck/>, label: "Pedidos fechados", value: crmRows.filter((item) => item.statusKey === "won").length, emphasis: true }
           ]}/>
           <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Cadastrar cliente</button><span>O cliente será incluído diretamente na etapa escolhida.</span></div>
-          <PipelineBoard rows={crmRows} onOpen={openClientProfile} onMove={moveClientStage}/>
+          <PipelineBoard rows={crmRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} onOpen={openClientProfile} onMove={moveClientStage}/>
         </div>
       ) : null}
 
@@ -4125,7 +4144,22 @@ function CompanyDataManager({ companies = [], busy, onMerge, onDelete }) {
   </section>;
 }
 
-function PipelineBoard({ rows = [], onOpen, onMove }) {
+function pipelineNextAction(client, activities = [], tasks = []) {
+  const pending = [
+    ...(client.nextContactAt ? [{ label: "Próximo contato", at: client.nextContactAt }] : []),
+    ...tasks.filter((task) => task.companyKey === client.companyKey && task.status === "open").map((task) => ({ label: task.title, at: task.dueAt })),
+    ...activities.filter((activity) => activity.companyKey === client.companyKey && activity.nextAction && activity.actionStatus !== "done").map((activity) => ({ label: activity.nextAction, at: activity.nextActionAt }))
+  ].filter((item) => item.at && Number.isFinite(new Date(item.at).getTime())).sort((a, b) => new Date(a.at) - new Date(b.at));
+  if (!pending.length) return { time: Number.MAX_SAFE_INTEGER, urgency: "no-action", label: "Sem próxima ação" };
+  const first = pending[0];
+  const time = new Date(first.at).getTime();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
+  const urgency = time < today.getTime() ? "overdue" : time < tomorrow.getTime() ? "today" : "scheduled";
+  return { time, urgency, label: `${first.label} · ${dateOnly(first.at)}` };
+}
+
+function PipelineBoard({ rows = [], activities = [], tasks = [], onOpen, onMove }) {
   const [moving, setMoving] = useState("");
   const [selectedStage, setSelectedStage] = useState(PIPELINE_STAGES[0].key);
   async function move(client, status) {
@@ -4147,7 +4181,7 @@ function PipelineBoard({ rows = [], onOpen, onMove }) {
       </nav>
       <section className="pipeline-board">
         {PIPELINE_STAGES.map((stage) => {
-          const stageRows = rows.filter((row) => row.statusKey === stage.key);
+          const stageRows = rows.filter((row) => row.statusKey === stage.key).sort((a, b) => pipelineNextAction(a, activities, tasks).time - pipelineNextAction(b, activities, tasks).time);
           const stageValue = stageRows.reduce((sum, row) => sum + safeNumber(row.expectedValue || row.quoteTotalNumber), 0);
           return (
             <article id={`pipeline-stage-${stage.key}`} className={`pipeline-column stage-${stage.key}`} key={stage.key} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
@@ -4158,11 +4192,17 @@ function PipelineBoard({ rows = [], onOpen, onMove }) {
             }}>
               <header><span>{stage.label}</span><b>{stageRows.length}</b><small>{money(stageValue)}</small></header>
               <div className="pipeline-cards">
-                {stageRows.map((client) => (
-                  <button type="button" draggable key={client.companyKey} className="pipeline-card" onDragStart={(event) => event.dataTransfer.setData("text/plain", client.companyKey)} onClick={() => onOpen(client)} disabled={moving === client.companyKey}>
-                    <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.itemCount || 0} item(ns)</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
-                  </button>
-                ))}
+                {stageRows.map((client) => {
+                  const clientActivities = activities.filter((activity) => activity.companyKey === client.companyKey && !activity.deletedAt);
+                  const attempts = clientActivities.filter((activity) => CONTACT_ACTIVITY_TYPES.includes(activity.type));
+                  const lastAttempt = attempts.slice().sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw))[0];
+                  const next = pipelineNextAction(client, activities, tasks);
+                  return <button type="button" draggable key={client.companyKey} className={`pipeline-card card-${next.urgency}`} onDragStart={(event) => event.dataTransfer.setData("text/plain", client.companyKey)} onClick={() => onOpen(client)} disabled={moving === client.companyKey}>
+                    <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.itemCount || 0} item(ns) · {attempts.length} tentativa(s)</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
+                    {lastAttempt ? <em>Último: {noteTypeLabel(lastAttempt.type)} · {lastAttempt.createdAtLabel}</em> : <em>Nenhum contato registrado</em>}
+                    <mark className={`next-action ${next.urgency}`}>{next.label}</mark>
+                  </button>;
+                })}
                 {!stageRows.length ? <p className="pipeline-empty">Solte um cliente aqui</p> : null}
               </div>
             </article>
@@ -4626,7 +4666,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   });
   const [taskForm, setTaskForm] = useState({ title: "Retornar contato", dueAt: localDateInput(new Date()), priority: "normal" });
   const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
-  const [noteForm, setNoteForm] = useState({ type: "contact_note", note: "", nextAction: "", nextActionAt: "", actionStatus: "" });
+  const [noteForm, setNoteForm] = useState({ type: "call_no_answer", note: "", nextAction: "", nextActionAt: "", actionStatus: "" });
   const [editingNote, setEditingNote] = useState(null);
   const [busyAction, setBusyAction] = useState("");
   const [stageStatus, setStageStatus] = useState("");
@@ -4640,9 +4680,9 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const followUpContext = useMemo(() => buildCartFollowUpContext(events), [events]);
   const activeReservationCodes = useMemo(() => new Set(reservations.map((item) => String(item.productCode || "").trim()).filter(Boolean)), [reservations]);
   const timelineEvents = useMemo(() => sortEventsDesc(events).slice(0, 25), [events]);
-  const noteActivities = useMemo(() => activities.filter((activity) => ["note", "contact_note", "negotiation_note", "after_sales_note"].includes(activity.type) && !activity.deletedAt).sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw)), [activities]);
+  const noteActivities = useMemo(() => activities.filter((activity) => NOTE_ACTIVITY_TYPES.includes(activity.type) && !activity.deletedAt).sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw)), [activities]);
   const historyGroups = useMemo(() => groupItemsByDate([
-    ...activities.filter((activity) => !["note", "contact_note", "negotiation_note", "after_sales_note"].includes(activity.type)).map((activity) => ({ kind: "crm", value: activity, timestamp: activity.createdAtRaw })),
+    ...activities.filter((activity) => !NOTE_ACTIVITY_TYPES.includes(activity.type)).map((activity) => ({ kind: "crm", value: activity, timestamp: activity.createdAtRaw })),
     ...timelineEvents.map((event) => ({ kind: "event", value: event, timestamp: event.timestamp }))
   ], (item) => item.timestamp), [activities, timelineEvents]);
   const openTasks = tasks.filter((task) => task.status === "open");
@@ -4657,9 +4697,14 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
   async function changePipelineStage(status) {
     if (status === form.status || busyAction === "stage") return;
+    let lostReason = form.lostReason || "";
+    if (status === "lost" && !lostReason) {
+      lostReason = window.prompt(`Informe o motivo da perda:\n\n${LOST_REASONS.join(" · ")}`, "")?.trim() || "";
+      if (!lostReason) { setError("Informe o motivo antes de mover para Perdido."); return; }
+    }
     const previous = form.status;
-    setForm((current) => ({ ...current, status })); setBusyAction("stage"); setStageStatus("Salvando...");
-    try { await onSave({ ...form, companyKey: client.companyKey, status }); setStageStatus("Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800); }
+    setForm((current) => ({ ...current, status, lostReason: status === "lost" ? lostReason : "" })); setBusyAction("stage"); setStageStatus("Salvando...");
+    try { await onSave({ ...form, companyKey: client.companyKey, status, lostReason: status === "lost" ? lostReason : "" }); setStageStatus("Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800); }
     catch (saveError) { setForm((current) => ({ ...current, status: previous })); setStageStatus("Não foi possível alterar"); setError(saveError.message || "Não foi possível alterar a etapa."); }
     finally { setBusyAction(""); }
   }
@@ -4692,7 +4737,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     try {
       if (editingNote) await onUpdateNote(editingNote.activityId, noteForm);
       else await onSaveNote(client, noteForm);
-      setNoteForm({ type: "contact_note", note: "", nextAction: "", nextActionAt: "", actionStatus: "" }); setEditingNote(null);
+      setNoteForm({ type: "call_no_answer", note: "", nextAction: "", nextActionAt: "", actionStatus: "" }); setEditingNote(null);
     } catch (saveError) { setError(saveError.message || "Não foi possível salvar a anotação."); }
     finally { setBusyAction(""); }
   }
@@ -4748,7 +4793,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
           return <div className="client-cart-history-row" key={`${event.id}-${event.timestamp}-${code}`}><span><b>{code || "-"}</b><small>{productName(product)}</small></span><strong>{quantity} un.</strong><em className={active ? "active" : "expired"}>{active ? "Reservado agora" : "Reserva expirada · mostrou interesse"}</em><time>{timeOnly(event.timestamp)}</time></div>;
         })}</div></details>)}{!cartEvents.length ? <EmptyState message="Nenhum item foi adicionado ao carrinho por este cliente."/> : null}</div></article></section> : null}
 
-        {tab === "notes" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Histórico de anotações</h3><p>Cada conversa e próximo passo ficam registrados com data, horário e responsável.</p></div></div><form className="crm-note-form" onSubmit={handleNote}><label>Tipo<select value={noteForm.type} onChange={(event) => setNoteForm((current) => ({ ...current, type: event.target.value }))}><option value="contact_note">Contato realizado</option><option value="negotiation_note">Negociação</option><option value="after_sales_note">Pós-venda</option><option value="note">Anotação geral</option></select></label><label className="note-text">Informação<textarea value={noteForm.note} onChange={(event) => setNoteForm((current) => ({ ...current, note: event.target.value }))} placeholder="Ex.: falei com o cliente, informou que fará o pedido amanhã..." required/></label><label>Próxima ação<input value={noteForm.nextAction} onChange={(event) => setNoteForm((current) => ({ ...current, nextAction: event.target.value }))} placeholder="Ex.: ligar novamente"/></label><label>Data da ação<input type="date" value={noteForm.nextActionAt} onChange={(event) => setNoteForm((current) => ({ ...current, nextActionAt: event.target.value, actionStatus: event.target.value ? "pending" : "" }))}/></label><div><button disabled={busyAction === "note"}><MessageSquare size={15}/> {editingNote ? "Salvar alteração" : "Adicionar ao histórico"}</button>{editingNote ? <button type="button" className="secondary-button" onClick={() => { setEditingNote(null); setNoteForm({ type: "contact_note", note: "", nextAction: "", nextActionAt: "", actionStatus: "" }); }}>Cancelar edição</button> : null}</div></form><div className="crm-note-list">{noteActivities.map((activity) => <article key={activity.activityId}><header><span><strong>{noteTypeLabel(activity.type)}</strong><small>{activity.owner || "Sem responsável"} · {activity.createdAtLabel}{activity.updatedAtRaw ? ` · editado ${activity.updatedAtLabel}` : ""}</small></span><span><button type="button" onClick={() => { setEditingNote(activity); setNoteForm({ type: activity.type, note: activity.note, nextAction: activity.nextAction || "", nextActionAt: activity.nextActionAt || "", actionStatus: activity.actionStatus || "" }); }}><Pencil size={14}/> Editar</button><button type="button" className="danger" onClick={() => onDeleteNote(activity.activityId)}><Trash2 size={14}/> Excluir</button></span></header><p>{activity.note}</p>{activity.nextAction ? <footer><CalendarDays size={14}/><strong>{activity.nextAction}</strong><span>{activity.nextActionAt ? dateOnly(activity.nextActionAt) : "Sem data"}</span><em className={`note-action-${activity.actionStatus || "pending"}`}>{activity.actionStatus === "done" ? "Concluída" : "Pendente"}</em></footer> : null}</article>)}{!noteActivities.length ? <EmptyState message="Nenhuma anotação registrada. O primeiro contato pode ser adicionado acima."/> : null}</div></section> : null}
+        {tab === "notes" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Histórico de contatos e anotações</h3><p>Registre cada tentativa, conversa e próximo passo. A primeira tentativa move automaticamente o cliente para Em contato.</p></div></div><form className="crm-note-form" onSubmit={handleNote}><label>Resultado do contato<select value={noteForm.type} onChange={(event) => setNoteForm((current) => ({ ...current, type: event.target.value }))}>{CONTACT_ACTIVITY_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="note-text">Informação<textarea value={noteForm.note} onChange={(event) => setNoteForm((current) => ({ ...current, note: event.target.value }))} placeholder="Ex.: falei com o cliente, informou que fará o pedido amanhã..." required/></label><label>Próxima ação<input value={noteForm.nextAction} onChange={(event) => setNoteForm((current) => ({ ...current, nextAction: event.target.value }))} placeholder="Ex.: ligar novamente"/></label><label>Data da ação<input type="date" value={noteForm.nextActionAt} onChange={(event) => setNoteForm((current) => ({ ...current, nextActionAt: event.target.value, actionStatus: event.target.value ? "pending" : "" }))}/></label><div><button disabled={busyAction === "note"}><MessageSquare size={15}/> {editingNote ? "Salvar alteração" : "Adicionar ao histórico"}</button>{editingNote ? <button type="button" className="secondary-button" onClick={() => { setEditingNote(null); setNoteForm({ type: "call_no_answer", note: "", nextAction: "", nextActionAt: "", actionStatus: "" }); }}>Cancelar edição</button> : null}</div></form><div className="crm-note-list">{noteActivities.map((activity) => <article key={activity.activityId}><header><span><strong>{noteTypeLabel(activity.type)}</strong><small>{activity.owner || "Sem responsável"} · {activity.createdAtLabel}{activity.updatedAtRaw ? ` · editado ${activity.updatedAtLabel}` : ""}</small></span><span><button type="button" onClick={() => { setEditingNote(activity); setNoteForm({ type: activity.type, note: activity.note, nextAction: activity.nextAction || "", nextActionAt: activity.nextActionAt || "", actionStatus: activity.actionStatus || "" }); }}><Pencil size={14}/> Editar</button><button type="button" className="danger" onClick={() => onDeleteNote(activity.activityId)}><Trash2 size={14}/> Excluir</button></span></header><p>{activity.note}</p>{activity.nextAction ? <footer><CalendarDays size={14}/><strong>{activity.nextAction}</strong><span>{activity.nextActionAt ? dateOnly(activity.nextActionAt) : "Sem data"}</span><em className={`note-action-${activity.actionStatus || "pending"}`}>{activity.actionStatus === "done" ? "Concluída" : "Pendente"}</em></footer> : null}</article>)}{!noteActivities.length ? <EmptyState message="Nenhuma anotação registrada. O primeiro contato pode ser adicionado acima."/> : null}</div></section> : null}
 
         {tab === "tasks" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Tarefas e retornos</h3><p>Defina o próximo passo e seja avisado quando o prazo chegar.</p></div></div><form className="task-form task-form-v2" onSubmit={handleTask}><label>Ação<input value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} required/></label><label>Data<DatePickerField value={taskForm.dueAt} onChange={(value) => setTaskForm((current) => ({ ...current, dueAt: value }))} required/></label><label>Prioridade<select value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value }))}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label><button disabled={busyAction === "task"}>Adicionar tarefa</button></form><div className="task-list task-list-v2">{openTasks.map((task) => <div key={task.taskId}><span><strong>{task.title}</strong><small>{task.dueAt ? dateOnly(task.dueAt) : "Sem prazo"} · {task.owner || "Sem responsável"}</small></span><span className="task-row-actions"><button type="button" onClick={() => onCompleteTask(task.taskId)}>Concluir</button><button type="button" className="danger" onClick={() => onCancelTask(task.taskId)}>Excluir</button></span></div>)}{!openTasks.length ? <EmptyState message="Nenhuma tarefa aberta."/> : null}</div><section className="outcome-card"><h3>Registrar resultado</h3><form onSubmit={handleOutcome}><select value={outcome.type} onChange={(event) => setOutcome((current) => ({ ...current, type: event.target.value }))}><option value="won">Pedido fechado</option><option value="lost">Oportunidade perdida</option></select><CurrencyInput value={outcome.value} onChange={(value) => setOutcome((current) => ({ ...current, value }))} placeholder="R$ 0,00"/>{outcome.type === "lost" ? <select value={outcome.reason} onChange={(event) => setOutcome((current) => ({ ...current, reason: event.target.value }))} required><option value="">Motivo da perda</option>{LOST_REASONS.map((reason) => <option key={reason}>{reason}</option>)}</select> : null}<input value={outcome.note} onChange={(event) => setOutcome((current) => ({ ...current, note: event.target.value }))} placeholder="Observação"/><button disabled={busyAction === "outcome"}>{busyAction === "outcome" ? "Registrando..." : "Registrar"}</button></form></section></section> : null}
 

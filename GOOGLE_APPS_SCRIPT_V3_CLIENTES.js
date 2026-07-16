@@ -1185,7 +1185,7 @@ function upsertCrmClient_(data) {
   const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
   if (!companyKey || cleanupReason_(companyName)) return { ok: false, error: "invalid_company" };
 
-  const allowedStatuses = ["new", "contact", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
+  const allowedStatuses = ["new", "contact", "qualified", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
   const customerCode = String(data.customerCode || "").trim().replace(/\s+/g, " ").slice(0, 80);
   const taxId = String(data.taxId !== undefined ? data.taxId : (data.cpfCnpj !== undefined ? data.cpfCnpj : "")).trim().replace(/\s+/g, "").slice(0, 30);
@@ -1380,7 +1380,7 @@ function importCrmClients_(data) {
   } finally { lock.releaseLock(); }
 }
 
-const PIPELINE_IMPORT_STATUSES_ = { new: true, contact: true, quoted: true, negotiation: true, waiting: true, won: true, active: true, cold: true, lost: true };
+const PIPELINE_IMPORT_STATUSES_ = { new: true, contact: true, qualified: true, quoted: true, negotiation: true, waiting: true, won: true, active: true, cold: true, lost: true };
 
 function upsertCrmTask_(data) {
   const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
