@@ -47,3 +47,11 @@ test("classifica cadastros novos, existentes e repetidos", () => {
   ], [{ customerCode: "10", companyName: "Cliente existente" }], "update");
   assert.deepEqual(rows.map((row) => row.action), ["update", "create", "error"]);
 });
+
+test("recupera semanticamente linha sem CPF/CNPJ e com colunas deslocadas", () => {
+  const items = []; const add = (str,x,y) => items.push({str,x,y});
+  [["Código",30],["CPF/CNPJ",80],["Nome/Razão social",200],["Telefone",470],["Município",570],["UF",690],["Endereço",720],["Rotas",845],["S/ Comprar",930]].forEach(([str,x]) => add(str,x,560));
+  add("155331",25,520); add("O FAROL ACABAMENTOS E ACESS LTDA",125,520); add("(51) 3442-0001",405,520); add("ALVORADA",515,520); add("RS",655,520); add("AV TESTE, 1",700,520); add("IMPORTADORA",825,520); add("6240 dias",925,520);
+  const [row] = parseSiggmaPdfPages([{width:1000,items}]);
+  assert.deepEqual([row.taxId,row.companyName,row.phone,row.city,row.state,row.address,row.route],["","O FAROL ACABAMENTOS E ACESS LTDA","(51) 3442-0001","ALVORADA","RS","AV TESTE, 1","IMPORTADORA"]);
+});

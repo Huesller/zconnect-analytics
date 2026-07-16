@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.3.0",
-  "release": "IMPORTACAO-CARTEIRA-PDF-EXCEL",
+  "version": "12.3.2",
+  "release": "PARSER-SEMANTICO-PDF-SIGGMA",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [

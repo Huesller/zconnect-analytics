@@ -71,6 +71,30 @@ function fieldForX(x, starts) {
   return selected;
 }
 
+function looksLikePhone(value) {
+  return /^\(?\d{2}\)?[\s-]*\d{3,5}/.test(String(value || "").trim());
+}
+
+function semanticRepair(rowItems, codeItem, starts, parsed) {
+  const ordered = [...rowItems].sort((a, b) => a.x - b.x || b.y - a.y);
+  const taxItems = ordered.filter((item) => { const count = digits(item.str).length; return (count === 11 || count === 14) && !looksLikePhone(item.str); });
+  const phoneAnchor = ordered.find((item) => /^\(\d{2}\)/.test(String(item.str || "").trim()));
+  const stateAnchor = ordered.find((item) => item.x > (phoneAnchor?.x || starts.phone) && /^[A-Z]{2}$/.test(String(item.str || "").trim().toUpperCase()));
+  if (!phoneAnchor || !stateAnchor) return parsed;
+  const cityAnchor = ordered.filter((item) => item.x > phoneAnchor.x + 12 && item.x < stateAnchor.x && /[A-Za-zÀ-ÿ]{3}/.test(String(item.str || "")) && !looksLikePhone(item.str)).sort((a, b) => a.x - b.x)[0];
+  if (!cityAnchor) return parsed;
+  const companyLeft = taxItems.length ? Math.max(...taxItems.map((item) => item.x + 10)) : (starts.taxId + starts.companyName) / 2 - 20;
+  const companyItems = ordered.filter((item) => item !== codeItem && !taxItems.includes(item) && item.x > companyLeft && item.x < phoneAnchor.x - 8 && !/^\d{3,8}$/.test(String(item.str || "").trim()));
+  const phoneItems = ordered.filter((item) => item.x >= phoneAnchor.x - 2 && item.x < cityAnchor.x - 4 && !companyItems.includes(item));
+  const cityItems = ordered.filter((item) => item.x >= cityAnchor.x - 2 && item.x < stateAnchor.x - 3);
+  const daysAnchor = ordered.find((item) => /\d+\s*dias?/i.test(String(item.str || "")));
+  const routeBoundary = Math.max(stateAnchor.x + 18, (starts.address + starts.route) / 2);
+  const afterState = ordered.filter((item) => item.x > stateAnchor.x + 3 && (!daysAnchor || item.x < daysAnchor.x - 2));
+  const companyName = cleanCell(companyItems);
+  if (!companyName) return parsed;
+  return { ...parsed, taxId: formatTaxId(cleanCell(taxItems, true)), companyName, phone: formatPhone(cleanCell(phoneItems, true)), city: cleanCell(cityItems), state: String(stateAnchor.str || "").trim().toUpperCase(), address: cleanCell(afterState.filter((item) => item.x < routeBoundary)), route: cleanCell(afterState.filter((item) => item.x >= routeBoundary)) || parsed.route };
+}
+
 export function parseSiggmaPdfPages(pages) {
   if (!pages?.length) return [];
   const starts = headerStarts(pages[0]);
@@ -84,14 +108,15 @@ export function parseSiggmaPdfPages(pages) {
       const upper = index ? (codes[index - 1].y + codeItem.y) / 2 : codeItem.y + 30;
       const lower = index + 1 < codes.length ? (codeItem.y + codes[index + 1].y) / 2 : codeItem.y - 30;
       const cells = Object.fromEntries(HEADER_FIELDS.map(([field]) => [field, []]));
-      page.items.filter((item) => item.y <= upper && item.y > lower).forEach((item) => {
+      const rowItems = page.items.filter((item) => item.y <= upper && item.y > lower);
+      rowItems.forEach((item) => {
         const field = fieldForX(item.x, starts);
         if (cells[field]) cells[field].push(item);
       });
       const companyName = cleanCell(cells.companyName).replace(/\s+/g, " ").trim();
       if (!companyName || normalizedText(companyName).includes("razao social")) return;
       const daysText = cleanCell(cells.daysWithoutPurchase);
-      rows.push({
+      const parsed = {
         customerCode: String(codeItem.str).trim(),
         taxId: formatTaxId(cleanCell(cells.taxId, true)),
         companyName,
@@ -104,7 +129,9 @@ export function parseSiggmaPdfPages(pages) {
         route: cleanCell(cells.route),
         daysWithoutPurchase: Number((daysText.match(/\d+/) || [0])[0]),
         source: "pdf"
-      });
+      };
+      const suspiciousShift = !/^\d{3}\.\d{3}\.\d{3}-\d{2}$|^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(parsed.taxId) && looksLikePhone(parsed.companyName);
+      rows.push(suspiciousShift ? semanticRepair(rowItems, codeItem, starts, parsed) : parsed);
     });
   });
   return rows;
