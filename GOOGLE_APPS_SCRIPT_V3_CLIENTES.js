@@ -1253,7 +1253,9 @@ function upsertCrmClient_(data) {
       state: state || previousRecord.state || "",
       address: address || previousRecord.address || "",
       route: route || previousRecord.route || "",
-      daysWithoutPurchase: daysWithoutPurchase || previousRecord.daysWithoutPurchase || 0,
+      daysWithoutPurchase: data.daysWithoutPurchase !== undefined || data.diasSemComprar !== undefined
+        ? daysWithoutPurchase
+        : (previousRecord.daysWithoutPurchase || 0),
       lastPurchaseAt: lastPurchaseAt || previousRecord.lastPurchaseAt || "",
       lastPurchaseValue: lastPurchaseValue || previousRecord.lastPurchaseValue || 0,
       purchaseTotal: purchaseTotal || previousRecord.purchaseTotal || 0,
@@ -1361,7 +1363,15 @@ function importCrmClients_(data) {
       };
       const record = {};
       headers.forEach(function(header) { record[header] = previous[header] !== undefined ? previous[header] : ""; });
-      Object.keys(imported).forEach(function(field) { if (imported[field] !== "" && imported[field] !== 0) record[field] = imported[field]; });
+      Object.keys(imported).forEach(function(field) {
+        if (field === "daysWithoutPurchase") {
+          // Zero é um valor válido: limpa classificações antigas criadas por uma
+          // leitura incorreta do PDF (por exemplo, o número da página como dias).
+          if (source.daysWithoutPurchase !== undefined) record[field] = imported[field];
+          return;
+        }
+        if (imported[field] !== "" && imported[field] !== 0) record[field] = imported[field];
+      });
       record.status = previous.status || (PIPELINE_IMPORT_STATUSES_[String(source.status || "")] ? String(source.status) : "new");
       record.owner = imported.owner || previous.owner || "";
       record.createdAt = previous.createdAt || now;
@@ -1604,7 +1614,7 @@ function createRestockTasks_(restockedProducts) {
     const code = codeIndex >= 0 ? String(row[codeIndex] || "").trim() : "";
     if (!productMap[code]) return;
     const eventName = eventIndex >= 0 ? String(row[eventIndex] || "") : "";
-    if (["product_open", "add_to_cart", "whatsapp_quote", "search"].indexOf(eventName) < 0) return;
+    if (["product_open", "add_to_cart", "whatsapp_quote"].indexOf(eventName) < 0) return;
     const companyName = companyIndex >= 0 ? String(row[companyIndex] || "").trim() : "";
     const companyKey = normalizeCompanyKey_(companyName);
     if (!companyKey || cleanupReason_(companyName)) return;

@@ -39,6 +39,18 @@ test("aceita planilha com cabeçalho fora da primeira linha", () => {
   assert.equal(rows[0].daysWithoutPurchase, 6240);
 });
 
+test("aceita a estrutura consolidada e não confunde página com dias sem comprar", () => {
+  const rows = parseExcelMatrix([
+    ["CARTEIRA CONSOLIDADA"],
+    [],
+    ["Código", "CPF/CNPJ", "Nome/Razão social", "Telefone", "Município", "UF", "Endereço", "Rota", "S/ Comprar", "Dias sem comprar", "Arquivo de origem", "Página"],
+    [177944, "52.495.630/0001-88", "52.495.630 ADILSON FIALHO EMERICH", "(18) 98121-4700", "ARACATUBA", "SP", "RUA TESTE", "IMPORTADORA", "-", null, "PAG3", 3]
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].taxId, "52.495.630/0001-88");
+  assert.equal(rows[0].daysWithoutPurchase, 0);
+});
+
 test("classifica cadastros novos, existentes e repetidos", () => {
   const rows = classifyImportedClients([
     { customerCode: "10", companyName: "Cliente existente" },

@@ -2088,16 +2088,8 @@ function buildDemandStockRows(events, catalogProducts, reservations, crmRows = [
     if (event.event === "product_open") touch(productFromEvent(event), "view", 1, event);
     if (event.event === "add_to_cart") touch(productFromEvent(event), "cart", event.quantity, event);
     if (event.event === "whatsapp_quote") quoteProducts(event).forEach((product) => touch(product, "quote", productQuantity(product, 1), event));
-    if (["search", "search_no_results"].includes(event.event) && event.query) {
-      const needle = String(event.query).trim().toLowerCase();
-      const normalizedNeedle = needle.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-      const matches = [...catalog.values()].filter((product) => {
-        const code = String(product.productCode || "").toLowerCase();
-        const name = String(product.productName || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        return code === needle || (normalizedNeedle.length >= 3 && name.includes(normalizedNeedle));
-      }).slice(0, 8);
-      matches.forEach((product) => touch(product, "search", 1, event));
-    }
+    // Busca registra a intenção pelo termo. Demanda de um SKU exige que o
+    // cliente abra, adicione ou cote aquele produto específico.
   });
   return [...map.values()].map((row) => {
     const product = catalog.get(row.productCode) || {};

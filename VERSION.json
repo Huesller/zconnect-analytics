@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.5.3",
-  "release": "CLIENTE-360-SINCRONIZACAO-E-RECENCIA",
+  "version": "12.5.5",
+  "release": "DEMANDA-POR-INTERACAO-REAL",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -45,7 +45,11 @@
     "Anotações e tarefas recém-salvas permanecem visíveis durante a sincronização automática",
     "Atualização periódica pausada enquanto o Cliente 360 está aberto",
     "Situação comercial renomeada para Recência da compra, sem confundir com a etapa do funil",
-    "Classificações de compra reescritas com faixas de dias claras"
+    "Classificações de compra reescritas com faixas de dias claras",
+    "Leitura XLSX tolerante a células vazias, sem erro de trim",
+    "Reimportação permite zerar dias sem comprar incorretos de versões anteriores",
+    "Buscas não transformam produtos sugeridos automaticamente em demanda de reposição",
+    "Demanda por produto considera somente abertura, carrinho e cotação do SKU"
   ],
   "module": "Analytics"
 }

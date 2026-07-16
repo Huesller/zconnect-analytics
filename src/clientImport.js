@@ -22,7 +22,9 @@ export async function readClientImportFile(file) {
     return rows;
   }
   if (["xlsx", "xlsm"].includes(extension)) {
-    const matrix = await readXlsxFile(new Blob([buffer]));
+    // A carteira consolidada possui células realmente vazias. A opção padrão da
+    // biblioteca tenta executar trim() também nesses valores e interrompe a leitura.
+    const matrix = await readXlsxFile(new Blob([buffer]), { trim: false });
     return parseExcelMatrix(matrix);
   }
   if (extension === "csv") {
