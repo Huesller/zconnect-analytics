@@ -2088,8 +2088,7 @@ function buildDemandStockRows(events, catalogProducts, reservations, crmRows = [
     if (event.event === "product_open") touch(productFromEvent(event), "view", 1, event);
     if (event.event === "add_to_cart") touch(productFromEvent(event), "cart", event.quantity, event);
     if (event.event === "whatsapp_quote") quoteProducts(event).forEach((product) => touch(product, "quote", productQuantity(product, 1), event));
-    // Busca registra a intenção pelo termo. Demanda de um SKU exige que o
-    // cliente abra, adicione ou cote aquele produto específico.
+    // Pesquisas ficam em uma leitura própria e nunca são distribuídas entre SKUs.
   });
   return [...map.values()].map((row) => {
     const product = catalog.get(row.productCode) || {};
@@ -2810,6 +2809,7 @@ function App() {
   }), [byType.productOpen, byType.added, byType.quotes]);
   const hotProducts = useMemo(() => commercialProducts.slice(0, 20), [commercialProducts]);
   const quotedProducts = useMemo(() => quotedProductRows(commercialProducts).slice(0, 20), [commercialProducts]);
+  const confirmedSearches = useMemo(() => noResultDemandRows(byType.searches).slice(0, 50), [byType.searches]);
   const noResultDemand = useMemo(() => noResultDemandRows(byType.noResults).slice(0, 50), [byType.noResults]);
 
   const consultantAccessRank = useMemo(() => countBy(byType.pageViews, (event) => normalizeConsultant(event.consultant)), [byType.pageViews]);
@@ -2961,6 +2961,18 @@ function App() {
       totalLabel: `${commercialProducts.length} produto${commercialProducts.length === 1 ? "" : "s"} com sinal comercial`,
       rows: commercialProducts,
       columns: HOT_PRODUCT_COLUMNS,
+      filters: { company: false, consultant: false }
+    });
+  }
+
+  function openConfirmedSearchesModal() {
+    const rows = noResultDemandRows(byType.searches);
+    openModal({
+      title: "Termos mais pesquisados",
+      description: "Somente pesquisas confirmadas pelo cliente. Sugestões exibidas durante a digitação não entram neste relatório.",
+      totalLabel: `${rows.length} termo${rows.length === 1 ? "" : "s"} pesquisado${rows.length === 1 ? "" : "s"}`,
+      rows,
+      columns: NO_RESULT_DEMAND_COLUMNS,
       filters: { company: false, consultant: false }
     });
   }
@@ -3792,7 +3804,7 @@ function App() {
             { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
             { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
           ]}/>
-          <ProductIntelligenceView hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenStock={openDemandProduct}/>
+          <ProductIntelligenceView searched={confirmedSearches} hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenSearched={openConfirmedSearchesModal} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenStock={openDemandProduct}/>
         </div>
       ) : null}
 
@@ -4217,17 +4229,18 @@ function PipelineBoard({ rows = [], activities = [], tasks = [], onOpen, onMove 
   );
 }
 
-function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = [], onOpenHot, onOpenQuoted, onOpenMissing, onOpenStock }) {
-  const [tab, setTab] = useState("hot");
+function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing = [], stock = [], onOpenSearched, onOpenHot, onOpenQuoted, onOpenMissing, onOpenStock }) {
+  const [tab, setTab] = useState("searched");
   const [stockFilter, setStockFilter] = useState("all");
   const [stockQuery, setStockQuery] = useState("");
   const tabs = [
-    ["hot", "Mais procurados", hot.length],
+    ["searched", "Pesquisas confirmadas", searched.length],
+    ["hot", "Produtos acessados", hot.length],
     ["quoted", "Mais cotados", quoted.length],
     ["stock", "Demanda x estoque", stock.length],
     ["missing", "Não encontrados", missing.length]
   ];
-  const sourceRows = tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
+  const sourceRows = tab === "searched" ? searched : tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
   const rows = tab === "stock" ? sourceRows.filter((row) => (stockFilter === "all" || row.signalKey === stockFilter) && (!stockQuery.trim() || row._search.includes(stockQuery.trim().toLowerCase()))) : sourceRows;
   function splitLabel(label) {
     const text = String(label || "");
@@ -4235,18 +4248,19 @@ function ProductIntelligenceView({ hot = [], quoted = [], missing = [], stock = 
     return index < 0 ? { code: "-", name: text || "-" } : { code: text.slice(0, index), name: text.slice(index + 3) };
   }
   return <article className="panel product-intelligence">
-    <div className="panel-head"><div><h2><Flame size={18}/> Inteligência de produtos</h2><p>Uma leitura por vez, com código e descrição sempre visíveis.</p></div><button type="button" className="refresh" onClick={tab === "hot" ? onOpenHot : tab === "quoted" ? onOpenQuoted : tab === "missing" ? onOpenMissing : undefined} disabled={tab === "stock"}>Abrir relatório completo</button></div>
+    <div className="panel-head"><div><h2><Flame size={18}/> Inteligência de produtos</h2><p>Buscas confirmadas ficam separadas das interações reais com cada produto.</p></div><button type="button" className="refresh" onClick={tab === "searched" ? onOpenSearched : tab === "hot" ? onOpenHot : tab === "quoted" ? onOpenQuoted : tab === "missing" ? onOpenMissing : undefined} disabled={tab === "stock"}>Abrir relatório completo</button></div>
     <nav className="product-tabs">{tabs.map(([key, label, count]) => <button type="button" key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><span>{label}</span><b>{count}</b></button>)}</nav>
     {tab === "stock" ? <div className="demand-filterbar"><label><Search size={14}/> Buscar<input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="código, produto ou marca"/></label><label><Filter size={14}/> Prioridade<select value={stockFilter} onChange={(event) => setStockFilter(event.target.value)}><option value="all">Todas</option><option value="unavailable">Procura sem disponibilidade</option><option value="priority">Reposição prioritária</option><option value="pressure">Estoque sob pressão</option><option value="restocked">Estoque normalizado</option><option value="normal">Demanda normal</option></select></label></div> : null}
     <div className="product-readable-table">
-      <div className="product-readable-head"><span>Produto / termo</span><span>{tab === "missing" ? "Ocorrências" : "Aberturas"}</span><span>{tab === "stock" ? "Estoque" : "Carrinhos"}</span><span>{tab === "stock" ? "Disponível" : "Cotações"}</span><span>Sinal</span></div>
+      <div className="product-readable-head"><span>Produto / termo</span><span>{["searched", "missing"].includes(tab) ? "Ocorrências" : "Aberturas"}</span><span>{tab === "stock" ? "Estoque" : ["searched", "missing"].includes(tab) ? "Empresas" : "Carrinhos"}</span><span>{tab === "stock" ? "Disponível" : ["searched", "missing"].includes(tab) ? "Consultores" : "Cotações"}</span><span>Sinal</span></div>
       {rows.slice(0, 50).map((row, index) => {
-        const label = tab === "missing" ? row.search : tab === "stock" ? `${row.productCode} - ${row.productName}` : row.product;
+        const isSearchTerm = ["searched", "missing"].includes(tab);
+        const label = isSearchTerm ? row.search : tab === "stock" ? `${row.productCode} - ${row.productName}` : row.product;
         const product = splitLabel(label);
-        const first = tab === "missing" ? row.count : tab === "stock" ? row.demandScore : row.views;
-        const second = tab === "missing" ? row.companies : tab === "stock" ? row.stockQty : row.carts;
-        const third = tab === "missing" ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
-        const signal = tab === "missing" ? `${row.companies || 0} empresa(s)` : tab === "stock" ? row.signal : `${row.score || 0} pts`;
+        const first = isSearchTerm ? row.count : tab === "stock" ? row.demandScore : row.views;
+        const second = isSearchTerm ? row.companies : tab === "stock" ? row.stockQty : row.carts;
+        const third = isSearchTerm ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
+        const signal = isSearchTerm ? (tab === "missing" ? "Sem resultado" : "Busca confirmada") : tab === "stock" ? row.signal : `${row.score || 0} pts`;
         return <div className={`product-readable-row ${tab === "stock" ? "clickable-demand" : ""}`} role={tab === "stock" ? "button" : undefined} tabIndex={tab === "stock" ? 0 : undefined} onClick={tab === "stock" ? () => onOpenStock?.(row) : undefined} onKeyDown={tab === "stock" ? (event) => { if (event.key === "Enter") onOpenStock?.(row); } : undefined} key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
       })}
       {!rows.length ? <EmptyState message="Sem dados para esta leitura no período."/> : null}
