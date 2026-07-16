@@ -67,7 +67,7 @@ const EVENT_LABELS = {
 
 const PIPELINE_STAGES = [
   { key: "new", label: "Novo interesse" },
-  { key: "contact", label: "Contato necessário" },
+  { key: "contact", label: "Em contato" },
   { key: "quoted", label: "Cotação enviada" },
   { key: "negotiation", label: "Negociação" },
   { key: "waiting", label: "Aguardando cliente" },
@@ -4629,6 +4629,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const [noteForm, setNoteForm] = useState({ type: "contact_note", note: "", nextAction: "", nextActionAt: "", actionStatus: "" });
   const [editingNote, setEditingNote] = useState(null);
   const [busyAction, setBusyAction] = useState("");
+  const [stageStatus, setStageStatus] = useState("");
   const [error, setError] = useState("");
   const [copiedFollowUp, setCopiedFollowUp] = useState(false);
   const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
@@ -4654,6 +4655,14 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   }, [onClose]);
 
   function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
+  async function changePipelineStage(status) {
+    if (status === form.status || busyAction === "stage") return;
+    const previous = form.status;
+    setForm((current) => ({ ...current, status })); setBusyAction("stage"); setStageStatus("Salvando...");
+    try { await onSave({ ...form, companyKey: client.companyKey, status }); setStageStatus("Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800); }
+    catch (saveError) { setForm((current) => ({ ...current, status: previous })); setStageStatus("Não foi possível alterar"); setError(saveError.message || "Não foi possível alterar a etapa."); }
+    finally { setBusyAction(""); }
+  }
   async function handleSubmit(event) {
     event.preventDefault(); setError("");
     try { await onSave({ ...form, companyKey: client.companyKey }); } catch (saveError) { setError(saveError.message || "Não foi possível salvar."); }
@@ -4695,7 +4704,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
 
   return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
     <section className="client-modal client-modal-v2" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-      <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></header>
+      <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><div className="client-header-actions"><label>Situação no funil<select value={form.status} disabled={busyAction === "stage" || isSaving} onChange={(event) => changePipelineStage(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select><small>{stageStatus || "Alteração salva automaticamente"}</small></label><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div></header>
       <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{client.itemCount || interestRows.length}</strong></div><div><span>Cotações</span><strong>{client.quotes}</strong></div><div><span>Valor cotado</span><strong>{client.quoteTotal}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
       <nav className="client-tabs">{tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
       <div className="client-tab-content">

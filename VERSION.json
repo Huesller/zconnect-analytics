@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.4.1",
-  "release": "DIA-ZERO-E-CORRECAO-DE-CAMPOS",
+  "version": "12.4.2",
+  "release": "FUNIL-RAPIDO-CLIENTE-360",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -32,7 +32,9 @@
     "Central de anotações com próximas ações e exportação Excel",
     "Última compra, valor, frequência e classificação comercial automática",
     "Reset administrativo Dia Zero para apagar toda a base comercial",
-    "Campos de anotações e datas corrigidos para fundo claro e texto legível"
+    "Campos de anotações e datas corrigidos para fundo claro e texto legível",
+    "Situação do funil editável no cabeçalho do Cliente 360 com salvamento automático",
+    "Etapa Contato necessário renomeada para Em contato"
   ],
   "module": "Analytics"
 }

@@ -1659,6 +1659,7 @@ input:focus {
 .client-modal-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 20px 22px; border-bottom: 1px solid #dedbd5; background: rgba(255,255,255,.97); }
 .client-modal-header h2 { margin: 0 0 5px; font-size: 25px; }
 .client-modal-header p { font-size: 11px; }
+.client-header-actions{display:flex;align-items:flex-start;gap:12px}.client-header-actions label{display:grid;gap:4px;min-width:190px;color:#55514b;font-size:9px;font-weight:850}.client-header-actions select{min-height:38px;border:1px solid #d2cec7;background:#fff;color:#191b1f;padding:0 10px;font-weight:800}.client-header-actions small{color:#77716a;font-size:8px;font-weight:650}.client-header-actions .modal-close{flex:0 0 auto}@media(max-width:700px){.client-modal-header{align-items:stretch}.client-header-actions{width:100%}.client-header-actions label{min-width:0;flex:1}}
 .client-summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-bottom: 1px solid #dedbd5; background: #f7f6f3; }
 .client-summary-grid > div { min-width: 0; padding: 16px 18px; border-right: 1px solid #dedbd5; }
 .client-summary-grid > div:last-child { border-right: 0; }
