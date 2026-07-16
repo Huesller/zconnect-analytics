@@ -86,10 +86,15 @@ const CRM_CLIENT_HEADERS = [
   "companyKey",
   "companyName",
   "customerCode",
+  "taxId",
   "contactName",
   "phone",
   "email",
   "city",
+  "state",
+  "address",
+  "route",
+  "daysWithoutPurchase",
   "segment",
   "status",
   "owner",
@@ -1172,10 +1177,15 @@ function upsertCrmClient_(data) {
   const allowedStatuses = ["new", "contact", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
   const customerCode = String(data.customerCode || "").trim().replace(/\s+/g, " ").slice(0, 80);
+  const taxId = String(data.taxId !== undefined ? data.taxId : (data.cpfCnpj !== undefined ? data.cpfCnpj : "")).trim().replace(/\s+/g, "").slice(0, 30);
   const contactName = String(data.contactName || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const phone = String(data.phone || "").replace(/[^0-9+]/g, "").slice(0, 20);
   const email = String(data.email || "").trim().toLowerCase().slice(0, 180);
   const city = String(data.city || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const state = String(data.state || data.uf || "").trim().replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase();
+  const address = String(data.address || data.endereco || "").trim().replace(/\s+/g, " ").slice(0, 300);
+  const route = String(data.route || data.rota || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const daysWithoutPurchase = Math.max(0, Math.floor(number_(data.daysWithoutPurchase || data.diasSemComprar || 0)));
   const segment = String(data.segment || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const ownerRaw = String(data.owner || data.consultant || "").trim();
   const owner = ownerRaw ? normalizeConsultor_(ownerRaw).slice(0, 80) : "";
@@ -1219,10 +1229,15 @@ function upsertCrmClient_(data) {
       companyKey: companyKey,
       companyName: companyName,
       customerCode: customerCode,
+      taxId: taxId || previousRecord.taxId || "",
       contactName: contactName,
       phone: phone,
       email: email,
       city: city,
+      state: state || previousRecord.state || "",
+      address: address || previousRecord.address || "",
+      route: route || previousRecord.route || "",
+      daysWithoutPurchase: daysWithoutPurchase || previousRecord.daysWithoutPurchase || 0,
       segment: segment,
       status: status,
       owner: owner,
@@ -1256,6 +1271,90 @@ function upsertCrmClient_(data) {
     lock.releaseLock();
   }
 }
+
+function importCrmClients_(data) {
+  const requested = Array.isArray(data.clients) ? data.clients.slice(0, 2000) : [];
+  if (!requested.length) return { ok: false, error: "empty_import" };
+  const strategy = String(data.duplicateStrategy || "update") === "skip" ? "skip" : "update";
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (err) { return { ok: false, error: "crm_busy" }; }
+  try {
+    const sheet = getCrmClientsSheet_();
+    const values = sheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const records = values.slice(1).map(function(row) {
+      const item = {};
+      headers.forEach(function(header, index) { item[header] = row[index]; });
+      return item;
+    });
+    const byKey = {};
+    const byCode = {};
+    const byTax = {};
+    records.forEach(function(record, index) {
+      const key = normalizeCompanyKey_(record.companyKey || record.companyName);
+      const code = String(record.customerCode || "").trim().toLowerCase();
+      const tax = String(record.taxId || "").replace(/\D/g, "");
+      if (key) byKey[key] = index;
+      if (code) byCode[code] = index;
+      if (tax) byTax[tax] = index;
+    });
+    const backupSheet = records.length ? createCleanupBackup_(headers, values.slice(1), "IMPORTACAO_CLIENTES") : "";
+    const now = new Date();
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    let errors = 0;
+    const seen = {};
+    requested.forEach(function(source) {
+      const companyName = String(source.companyName || source.razaoSocial || "").trim().replace(/\s+/g, " ").slice(0, 120);
+      const companyKey = normalizeCompanyKey_(source.companyKey || companyName);
+      const customerCode = String(source.customerCode || source.codigo || "").trim().replace(/\s+/g, " ").slice(0, 80);
+      const taxId = String(source.taxId || source.cpfCnpj || "").trim().replace(/\s+/g, "").slice(0, 30);
+      const taxDigits = taxId.replace(/\D/g, "");
+      const identity = taxDigits || customerCode.toLowerCase() || companyKey;
+      if (!companyName || (!customerCode && !taxId) || !companyKey || seen[identity] || cleanupReason_(companyName)) { errors += 1; return; }
+      seen[identity] = true;
+      let index = taxDigits && byTax[taxDigits] !== undefined ? byTax[taxDigits] : customerCode && byCode[customerCode.toLowerCase()] !== undefined ? byCode[customerCode.toLowerCase()] : byKey[companyKey];
+      if (index !== undefined && strategy === "skip") { skipped += 1; return; }
+      const previous = index !== undefined ? records[index] : {};
+      const imported = {
+        companyKey: companyKey,
+        companyName: companyName,
+        customerCode: customerCode,
+        taxId: taxId,
+        contactName: String(source.contactName || "").trim().replace(/\s+/g, " ").slice(0, 120),
+        phone: String(source.phone || "").replace(/[^0-9+]/g, "").slice(0, 20),
+        email: String(source.email || "").trim().toLowerCase().slice(0, 180),
+        city: String(source.city || "").trim().replace(/\s+/g, " ").slice(0, 120),
+        state: String(source.state || source.uf || "").replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase(),
+        address: String(source.address || source.endereco || "").trim().replace(/\s+/g, " ").slice(0, 300),
+        route: String(source.route || source.rota || "").trim().replace(/\s+/g, " ").slice(0, 120),
+        daysWithoutPurchase: Math.max(0, Math.floor(number_(source.daysWithoutPurchase || 0))),
+        segment: String(source.segment || "").trim().replace(/\s+/g, " ").slice(0, 120),
+        owner: String(source.owner || "").trim() ? normalizeConsultor_(source.owner).slice(0, 80) : ""
+      };
+      const record = {};
+      headers.forEach(function(header) { record[header] = previous[header] !== undefined ? previous[header] : ""; });
+      Object.keys(imported).forEach(function(field) { if (imported[field] !== "" && imported[field] !== 0) record[field] = imported[field]; });
+      record.status = previous.status || (PIPELINE_IMPORT_STATUSES_[String(source.status || "")] ? String(source.status) : "new");
+      record.owner = imported.owner || previous.owner || "";
+      record.createdAt = previous.createdAt || now;
+      record.updatedAt = now;
+      if (index !== undefined) { records[index] = record; updated += 1; }
+      else {
+        index = records.length;
+        records.push(record); created += 1;
+        byKey[companyKey] = index;
+        if (customerCode) byCode[customerCode.toLowerCase()] = index;
+        if (taxDigits) byTax[taxDigits] = index;
+      }
+    });
+    if (records.length) sheet.getRange(2, 1, records.length, headers.length).setValues(records.map(function(record) { return headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; }); }));
+    return { ok: true, total: requested.length, created: created, updated: updated, skipped: skipped, errors: errors, backupSheet: backupSheet };
+  } finally { lock.releaseLock(); }
+}
+
+const PIPELINE_IMPORT_STATUSES_ = { new: true, contact: true, quoted: true, negotiation: true, waiting: true, won: true, active: true, cold: true, lost: true };
 
 function upsertCrmTask_(data) {
   const companyName = String(data.companyName || "").trim().replace(/\s+/g, " ").slice(0, 120);
@@ -1935,6 +2034,7 @@ function doPost(e) {
 
   const adminActions = {
     upsert_crm_client: true,
+    import_crm_clients: true,
     upsert_crm_task: true,
     complete_crm_task: true,
     cancel_crm_task: true,
@@ -1954,6 +2054,7 @@ function doPost(e) {
   if (adminActions[action] && !validateAdminAccess_(data)) return jsonOutput({ ok: false, error: "unauthorized" });
 
   if (action === "upsert_crm_client") return jsonOutput(upsertCrmClient_(data));
+  if (action === "import_crm_clients") return jsonOutput(importCrmClients_(data));
   if (action === "upsert_crm_task") return jsonOutput(upsertCrmTask_(data));
   if (action === "complete_crm_task") return jsonOutput(completeCrmTask_(data));
   if (action === "cancel_crm_task") return jsonOutput(cancelCrmTask_(data));

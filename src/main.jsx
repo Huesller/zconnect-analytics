@@ -21,6 +21,7 @@ import {
   ShoppingCart,
   Trash2,
   TrendingUp,
+  Upload,
   UserCheck,
   UserPlus,
   Users,
@@ -34,6 +35,8 @@ import { EmptyState } from "./components/EmptyState.jsx";
 import { ExecutiveHeader } from "./components/ExecutiveHeader.jsx";
 import { StatGrid } from "./components/StatGrid.jsx";
 import { RankingTable } from "./components/RankingTable.jsx";
+import { readClientImportFile } from "./clientImport.js";
+import { classifyImportedClients } from "./clientImportCore.js";
 
 const ANALYTICS_API_URL = "/api/analytics";
 const EMPTY_PERIOD_MESSAGE = "Nenhum evento registrado no período.";
@@ -567,9 +570,14 @@ async function fetchCrmClients() {
     ...client,
     companyKey: String(client.companyKey || ""),
     companyName: normalizeCompany(client.companyName),
+    taxId: String(client.taxId || ""),
     phone: String(client.phone || ""),
     status: String(client.status || "new"),
     owner: String(client.owner || ""),
+    state: String(client.state || ""),
+    address: String(client.address || ""),
+    route: String(client.route || ""),
+    daysWithoutPurchase: safeNumber(client.daysWithoutPurchase),
     nextContactAt: String(client.nextContactAt || ""),
     tags: String(client.tags || ""),
     notes: String(client.notes || ""),
@@ -1715,10 +1723,15 @@ function buildCrmRows(events, reservations, crmClients) {
       statusKey,
       status: crmStatusLabel(statusKey),
       customerCode: String(meta.customerCode || ""),
+      taxId: String(meta.taxId || ""),
       contactName: String(meta.contactName || ""),
       phone: String(meta.phone || ""),
       email: String(meta.email || ""),
       city: String(meta.city || ""),
+      state: String(meta.state || ""),
+      address: String(meta.address || ""),
+      route: String(meta.route || ""),
+      daysWithoutPurchase: safeNumber(meta.daysWithoutPurchase),
       segment: String(meta.segment || ""),
       owner: meta.owner ? normalizeConsultant(meta.owner).toUpperCase() : row.consultant,
       nextContactAt: String(meta.nextContactAt || ""),
@@ -1739,7 +1752,7 @@ function buildCrmRows(events, reservations, crmClients) {
       quoteRate: percent(row.productOpen ? row.quotes / row.productOpen : 0),
       quoteTotal: money(row.quoteTotalNumber),
       lastEvent: row.lastEventRaw ? dateTime(row.lastEventRaw) : "-",
-      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.customerCode, meta.contactName, meta.phone, meta.email, meta.city, meta.segment, meta.tags, ...topProducts].join(" ").toLowerCase()
+      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.customerCode, meta.taxId, meta.contactName, meta.phone, meta.email, meta.city, meta.state, meta.address, meta.route, meta.segment, meta.tags, ...topProducts].join(" ").toLowerCase()
     };
   }).sort((a, b) => b.score - a.score || new Date(b.lastEventRaw) - new Date(a.lastEventRaw));
 }
@@ -2502,6 +2515,7 @@ function App() {
   const [selectedClient, setSelectedClient] = useState(null);
   const [selectedDemandProduct, setSelectedDemandProduct] = useState(null);
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
+  const [isClientImportOpen, setIsClientImportOpen] = useState(false);
   const [selectedCleanupKeys, setSelectedCleanupKeys] = useState([]);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isSavingCrm, setIsSavingCrm] = useState(false);
@@ -2977,10 +2991,15 @@ function App() {
         statusKey: normalized.status,
         status: crmStatusLabel(normalized.status),
         customerCode: normalized.customerCode || "",
+        taxId: normalized.taxId || "",
         contactName: normalized.contactName || "",
         phone: normalized.phone,
         email: normalized.email || "",
         city: normalized.city || "",
+        state: normalized.state || "",
+        address: normalized.address || "",
+        route: normalized.route || "",
+        daysWithoutPurchase: safeNumber(normalized.daysWithoutPurchase),
         segment: normalized.segment || "",
         owner: normalized.owner ? normalizeConsultant(normalized.owner).toUpperCase() : current.owner,
         nextContactAt: normalized.nextContactAt,
@@ -3013,10 +3032,15 @@ function App() {
       statusKey: normalized.status || "new",
       status: crmStatusLabel(normalized.status || "new"),
       customerCode: normalized.customerCode || "",
+      taxId: normalized.taxId || "",
       contactName: normalized.contactName || "",
       phone: normalized.phone || "",
       email: normalized.email || "",
       city: normalized.city || "",
+      state: normalized.state || "",
+      address: normalized.address || "",
+      route: normalized.route || "",
+      daysWithoutPurchase: safeNumber(normalized.daysWithoutPurchase),
       segment: normalized.segment || "",
       nextContactAt: normalized.nextContactAt || "",
       nextContact: normalized.nextContactAt ? dateOnly(normalized.nextContactAt) : "-",
@@ -3028,6 +3052,31 @@ function App() {
       score: 0, totalActions: 0, itemCount: 0, quotes: 0, quoteTotalNumber: 0, quoteTotal: money(0), activeCartQty: 0,
       topProducts: [], activeCartProducts: [], lastEvent: "Cliente cadastrado manualmente", lastEventRaw: ""
     });
+  }
+
+  async function importClientPortfolio({ rows, duplicateStrategy, owner, status }) {
+    setIsSavingCrm(true);
+    try {
+      const clients = rows.filter((row) => row.valid && row.action !== "skip").map((row) => ({
+        ...row,
+        owner: owner || authProfile.username,
+        status: status || "new"
+      }));
+      if (!clients.length) throw new Error("Nenhum cliente válido foi selecionado para importação.");
+      const result = await postAnalyticsActionWithRetry("import_crm_clients", { clients, duplicateStrategy }, {
+        maxAttempts: 3,
+        onRetry: ({ attempt, maxAttempts }) => showToast(`Planilha ocupada. Nova tentativa ${attempt} de ${maxAttempts}...`)
+      });
+      await load({ silent: true });
+      setIsClientImportOpen(false);
+      showToast(`${result.created || 0} cliente(s) criado(s) e ${result.updated || 0} atualizado(s). Backup: ${result.backupSheet || "não necessário"}.`);
+      return result;
+    } catch (error) {
+      showToast(error.message || "Não foi possível importar a carteira.", "error");
+      throw error;
+    } finally {
+      setIsSavingCrm(false);
+    }
   }
 
   async function saveCrmTask(form) {
@@ -3627,7 +3676,7 @@ function App() {
             { icon: <CalendarDays/>, label: "Próximos contatos vencidos", value: dueFollowUps },
             { icon: <Send/>, label: "Valor cotado", value: money(crmRows.reduce((sum, item) => sum + item.quoteTotalNumber, 0)), emphasis: true }
           ]}/>
-          <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Novo cliente</button><span>Cada vendedor cadastra e administra somente a própria carteira.</span></div>
+          <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Novo cliente</button><button type="button" className="crm-secondary-action" onClick={() => setIsClientImportOpen(true)}><Upload size={16}/> Importar carteira</button><span>PDF do SIGGMA, Excel ou CSV, sempre com prévia antes de gravar.</span></div>
           <ClientCrmTable rows={crmRows} onOpen={openClientProfile}/>
         </div>
       ) : null}
@@ -3797,6 +3846,7 @@ function App() {
       ) : null}
       {selectedDemandProduct ? <ProductDemandModal product={selectedDemandProduct} onClose={() => setSelectedDemandProduct(null)} onOpenClient={(client) => { setSelectedDemandProduct(null); setSelectedClient(client); }} onCopy={async (product) => { await copyTextToClipboard(stockRestockMessage(product)); showToast("Mensagem de reposição copiada."); }}/> : null}
       {isNewClientOpen ? <NewClientModal owner={authProfile.displayName || authProfile.username} onClose={() => setIsNewClientOpen(false)} onSave={createManualClient} isSaving={isSavingCrm}/> : null}
+      {isClientImportOpen ? <ClientImportModal existingClients={crmClients} profile={authProfile} onClose={() => setIsClientImportOpen(false)} onImport={importClientPortfolio} isSaving={isSavingCrm}/> : null}
       {toast ? <div className={`toast ${toast.type}`} role={toast.type === "error" ? "alert" : "status"}>{toast.message}</div> : null}
     </main>
   );
@@ -4354,7 +4404,7 @@ function buildClientInterestRows(events = [], reservations = []) {
 }
 
 function NewClientModal({ owner, onClose, onSave, isSaving }) {
-  const [form, setForm] = useState({ companyName: "", customerCode: "", contactName: "", phone: "", email: "", city: "", segment: "", status: "new", owner: owner || "", nextContactAt: "", expectedValue: "", tags: "", notes: "" });
+  const [form, setForm] = useState({ companyName: "", customerCode: "", taxId: "", contactName: "", phone: "", email: "", city: "", state: "", address: "", route: "", daysWithoutPurchase: "", segment: "", status: "new", owner: owner || "", nextContactAt: "", expectedValue: "", tags: "", notes: "" });
   const [error, setError] = useState("");
   function update(key, value) { setForm((current) => ({ ...current, [key]: value })); }
   async function submit(event) {
@@ -4371,10 +4421,15 @@ function NewClientModal({ owner, onClose, onSave, isSaving }) {
     <form className="client-form client-form-v2" onSubmit={submit}><div className="client-form-grid">
       <label>Empresa *<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required autoFocus/></label>
       <label>Código interno<input value={form.customerCode} onChange={(event) => update("customerCode", event.target.value)} placeholder="Código do cliente"/></label>
+      <label>CPF/CNPJ<input value={form.taxId} onChange={(event) => update("taxId", event.target.value)} placeholder="Documento do cliente"/></label>
       <label>Contato<input value={form.contactName} onChange={(event) => update("contactName", event.target.value)} placeholder="Nome da pessoa"/></label>
       <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
       <label>E-mail<input type="email" value={form.email} onChange={(event) => update("email", event.target.value)}/></label>
       <label>Cidade<input value={form.city} onChange={(event) => update("city", event.target.value)}/></label>
+      <label>UF<input maxLength="2" value={form.state} onChange={(event) => update("state", event.target.value.toUpperCase())}/></label>
+      <label className="wide-field">Endereço<input value={form.address} onChange={(event) => update("address", event.target.value)}/></label>
+      <label>Rota<input value={form.route} onChange={(event) => update("route", event.target.value)}/></label>
+      <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => update("daysWithoutPurchase", event.target.value)}/></label>
       <label>Segmento<input value={form.segment} onChange={(event) => update("segment", event.target.value)} placeholder="Atacado, funilaria..."/></label>
       <label>Etapa<select value={form.status} onChange={(event) => update("status", event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>
       <label>Responsável<input value={form.owner} onChange={(event) => update("owner", event.target.value)} required/></label>
@@ -4386,11 +4441,57 @@ function NewClientModal({ owner, onClose, onSave, isSaving }) {
   </section></div>;
 }
 
+function ClientImportModal({ existingClients = [], profile, onClose, onImport, isSaving }) {
+  const [file, setFile] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [duplicateStrategy, setDuplicateStrategy] = useState("update");
+  const [owner, setOwner] = useState(profile?.username || "");
+  const [status, setStatus] = useState("new");
+  const [reading, setReading] = useState(false);
+  const [error, setError] = useState("");
+  const classified = useMemo(() => classifyImportedClients(rows, existingClients, duplicateStrategy), [rows, existingClients, duplicateStrategy]);
+  const summary = useMemo(() => classified.reduce((total, row) => ({ ...total, [row.action]: (total[row.action] || 0) + 1 }), { create: 0, update: 0, skip: 0, error: 0 }), [classified]);
+  const canEditOwner = profile?.role === "admin" || (profile?.consultants || []).includes("*");
+
+  async function chooseFile(event) {
+    const selected = event.target.files?.[0] || null;
+    setFile(selected); setRows([]); setError("");
+    if (!selected) return;
+    setReading(true);
+    try { setRows(await readClientImportFile(selected)); }
+    catch (readError) { setError(readError.message || "Não foi possível interpretar o arquivo."); }
+    finally { setReading(false); }
+  }
+
+  async function confirm() {
+    setError("");
+    try { await onImport({ rows: classified, duplicateStrategy, owner, status }); }
+    catch (importError) { setError(importError.message || "Não foi possível importar os clientes."); }
+  }
+
+  useEffect(() => {
+    function keydown(event) { if (event.key === "Escape" && !isSaving) onClose(); }
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [onClose, isSaving]);
+
+  return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={() => !isSaving && onClose()}><section className="client-import-modal" role="dialog" aria-modal="true" aria-labelledby="client-import-title" onMouseDown={(event) => event.stopPropagation()}>
+    <header className="client-modal-header"><div><span className="eyebrow">IMPORTAÇÃO INTELIGENTE</span><h2 id="client-import-title">Importar carteira de clientes</h2><p>Leia o PDF exportado pelo SIGGMA ou uma planilha Excel e confira tudo antes de salvar.</p></div><button type="button" className="modal-close" onClick={onClose} disabled={isSaving}><X size={18}/></button></header>
+    <div className="client-import-body">
+      <label className="client-import-drop"><input type="file" accept=".pdf,.xlsx,.xlsm,.csv" onChange={chooseFile}/><Upload size={24}/><strong>{reading ? "Lendo e organizando..." : file ? file.name : "Selecionar PDF ou Excel"}</strong><span>PDF SIGGMA, XLSX, XLSM ou CSV · limite de 2.000 clientes</span></label>
+      <div className="client-import-settings"><label>Duplicidades<select value={duplicateStrategy} onChange={(event) => setDuplicateStrategy(event.target.value)}><option value="update">Atualizar cadastro existente</option><option value="skip">Ignorar cadastro existente</option></select></label><label>Etapa inicial<select value={status} onChange={(event) => setStatus(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label><label>Responsável<input value={owner} disabled={!canEditOwner} onChange={(event) => setOwner(event.target.value)} required/></label></div>
+      {classified.length ? <><div className="client-import-summary"><div><span>LIDOS</span><strong>{classified.length}</strong></div><div><span>NOVOS</span><strong>{summary.create}</strong></div><div><span>ATUALIZAR</span><strong>{summary.update}</strong></div><div><span>IGNORAR</span><strong>{summary.skip}</strong></div><div className={summary.error ? "danger" : ""}><span>ERROS</span><strong>{summary.error}</strong></div></div><div className="client-import-preview"><table><thead><tr><th>Ação</th><th>Código</th><th>CPF/CNPJ</th><th>Nome/Razão social</th><th>Telefone</th><th>Município/UF</th><th>Rota</th><th>S/ comprar</th></tr></thead><tbody>{classified.slice(0, 100).map((row) => <tr key={`${row.rowNumber}-${row.customerCode}-${row.taxId}`}><td><span className={`import-action ${row.action}`}>{row.action === "create" ? "Novo" : row.action === "update" ? "Atualizar" : row.action === "skip" ? "Ignorar" : "Revisar"}</span></td><td>{row.customerCode || "-"}</td><td>{row.taxId || "-"}</td><td><strong>{row.companyName || "Nome ausente"}</strong><small>{row.address || ""}</small></td><td>{row.phone || "-"}</td><td>{row.city || "-"}{row.state ? ` / ${row.state}` : ""}</td><td>{row.route || "-"}</td><td>{row.daysWithoutPurchase ? `${row.daysWithoutPurchase} dias` : "-"}</td></tr>)}</tbody></table>{classified.length > 100 ? <p>Prévia das primeiras 100 linhas de {classified.length}.</p> : null}</div></> : null}
+      {error ? <p className="form-error">{error}</p> : null}
+    </div>
+    <footer className="client-import-actions"><button type="button" className="secondary-button" onClick={onClose} disabled={isSaving}>Cancelar</button><button type="button" className="crm-save" onClick={confirm} disabled={isSaving || reading || !classified.some((row) => row.valid && row.action !== "skip")}>{isSaving ? <RefreshCw className="spin" size={16}/> : <Upload size={16}/>} {isSaving ? "Importando..." : "Confirmar importação"}</button></footer>
+  </section></div>;
+}
+
 function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onCancelTask, onOutcome, onDeleteClient, onSaveNote, onUpdateNote, onDeleteNote, isSaving }) {
   const initialContactDate = crmContactDate(client.nextContactAt);
   const [tab, setTab] = useState(client.initialTab || "summary");
   const [form, setForm] = useState({
-    companyName: client.company, customerCode: client.customerCode || "", contactName: client.contactName || "", phone: client.phone || "", email: client.email || "", city: client.city || "", segment: client.segment || "", status: client.statusKey || "new", owner: client.owner || "",
+    companyName: client.company, customerCode: client.customerCode || "", taxId: client.taxId || "", contactName: client.contactName || "", phone: client.phone || "", email: client.email || "", city: client.city || "", state: client.state || "", address: client.address || "", route: client.route || "", daysWithoutPurchase: client.daysWithoutPurchase || "", segment: client.segment || "", status: client.statusKey || "new", owner: client.owner || "",
     nextContactAt: initialContactDate ? localDateInput(initialContactDate) : "", tags: client.tags || "", notes: client.notes || "",
     expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || ""
   });
@@ -4478,6 +4579,11 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
             <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
             <label>E-mail<input type="email" value={form.email} onChange={(event) => update("email", event.target.value)}/></label>
             <label>Cidade<input value={form.city} onChange={(event) => update("city", event.target.value)}/></label>
+            <label>UF<input value={form.state} onChange={(event) => update("state", event.target.value.toUpperCase().slice(0, 2))} maxLength={2} placeholder="SC"/></label>
+            <label>CPF/CNPJ<input value={form.taxId} onChange={(event) => update("taxId", event.target.value)} placeholder="00.000.000/0000-00"/></label>
+            <label>Rota<input value={form.route} onChange={(event) => update("route", event.target.value)} placeholder="Rota comercial ou região"/></label>
+            <label className="wide-field">Endereço<input value={form.address} onChange={(event) => update("address", event.target.value)} placeholder="Logradouro, número e bairro"/></label>
+            <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => update("daysWithoutPurchase", event.target.value)} placeholder="0"/></label>
             <label>Segmento<input value={form.segment} onChange={(event) => update("segment", event.target.value)} placeholder="Atacado, funilaria..."/></label>
             <label>Responsável<input value={form.owner} onChange={(event) => update("owner", event.target.value)} placeholder="Nome do responsável"/></label>
             <label>Próximo contato<DatePickerField value={form.nextContactAt} onChange={(value) => update("nextContactAt", value)}/></label>

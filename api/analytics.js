@@ -43,6 +43,23 @@ async function readUpstream(apiUrl, adminToken, action, signal) {
 async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, signal) {
   if (isAdmin(profile)) return true;
   const allowed = allowedConsultants(profile);
+  if (action === "import_crm_clients") {
+    const clients = Array.isArray(body.clients) ? body.clients : [];
+    if (!clients.length || clients.length > 2000) return false;
+    const data = await readUpstream(apiUrl, adminToken, "crm_clients", signal);
+    const existing = data.clients || [];
+    return clients.every((requested) => {
+      const key = normalizeCompanyKey(requested.companyKey || requested.companyName);
+      const code = String(requested.customerCode || "").trim().toLowerCase();
+      const tax = String(requested.taxId || "").replace(/\D/g, "");
+      const match = existing.find((client) => (
+        (key && normalizeCompanyKey(client.companyKey || client.companyName) === key)
+        || (code && String(client.customerCode || "").trim().toLowerCase() === code)
+        || (tax && String(client.taxId || "").replace(/\D/g, "") === tax)
+      ));
+      return !match || allowed.has(rowConsultant(match));
+    });
+  }
   if (["complete_crm_task", "cancel_crm_task"].includes(action)) {
     const data = await readUpstream(apiUrl, adminToken, "crm_tasks", signal);
     const task = (data.tasks || []).find((item) => String(item.taskId || item.id) === String(body.taskId || ""));
@@ -125,6 +142,9 @@ export default async function handler(req, res) {
         if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client"].includes(action)) {
           body.owner = primaryConsultant;
           body.consultant = primaryConsultant;
+        }
+        if (action === "import_crm_clients" && Array.isArray(body.clients)) {
+          body.clients = body.clients.map((client) => ({ ...client, owner: primaryConsultant }));
         }
       }
       body.adminToken = adminToken;

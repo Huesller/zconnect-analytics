@@ -1,9 +1,14 @@
-# Z Connect Analytics CRM 12.1
+# Z Connect Analytics CRM 12.3
 
 Painel de inteligência comercial com login real no servidor, fila diária, funil Kanban, Cliente 360, tarefas, metas, resultados, reservas e monitor do catálogo. Nenhuma regra de preço ou desconto foi alterada.
 
 ## O que entrou nesta versão
 
+- Importação inteligente da carteira de clientes por PDF exportado pelo SIGGMA, XLSX, XLSM ou CSV.
+- Prévia dos registros antes da gravação, identificação de erros e opção de atualizar ou ignorar duplicidades.
+- Importação em lote limitada a 2.000 clientes, com backup automático da aba `CRM_CLIENTS` antes de atualizar dados existentes.
+- Cliente 360 ampliado com CPF/CNPJ, UF, endereço, rota e dias sem compra.
+- Importações feitas por vendedores ficam vinculadas à própria carteira; o administrador pode definir o responsável.
 - Demanda x estoque com busca e filtros por procura sem disponibilidade, reposição prioritária, pressão, normalização e situação normal.
 - Clique no produto para abrir os clientes que buscaram, visualizaram, adicionaram ou cotaram o item.
 - Mensagem pronta de reposição por cliente e acesso direto ao WhatsApp.
@@ -101,6 +106,7 @@ Abra o endereço informado pelo `vercel dev`, faça login e valide:
 5. Carrinhos e modal de reservas.
 6. Qualidade: prévia e limpeza seletiva.
 7. Entrar com Huesller/Ney/Junior/Francisco e confirmar que cada um enxerga apenas a própria carteira. A área **Qualidade** aparece somente para o administrador.
+8. Em **CRM > Clientes**, abrir **Importar carteira**, selecionar um PDF SIGGMA ou planilha, revisar a prévia e confirmar um pequeno lote de teste.
 
 O `npm run dev` sozinho serve apenas a interface Vite; para testar login e rotas `/api`, use `npx vercel dev`.
 

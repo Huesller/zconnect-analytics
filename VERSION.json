@@ -1,8 +1,8 @@
 {
   "project": "Z Connect",
-  "version": "12.2.0",
-  "release": "DEMANDA-REPOSICAO-CARRINHOS",
-  "build": "2026-07-15",
+  "version": "12.3.0",
+  "release": "IMPORTACAO-CARTEIRA-PDF-EXCEL",
+  "build": "2026-07-16",
   "environment": "production",
   "notes": [
     "Login real no servidor com cookie HttpOnly e APIs protegidas",
@@ -25,7 +25,10 @@
     "Tarefas automáticas no CRM quando um item volta ao estoque",
     "Código interno do cliente disponível no cadastro e nas buscas",
     "Demanda não atendida isolada dos demais itens do pedido",
-    "Pedidos fechados removidos da fila de carrinhos que precisam de contato"
+    "Pedidos fechados removidos da fila de carrinhos que precisam de contato",
+    "Importação de carteira por PDF SIGGMA, XLSX, XLSM ou CSV com prévia e validação",
+    "Tratamento seguro de duplicidades, backup automático e atualização em lote",
+    "Cliente 360 ampliado com CPF/CNPJ, UF, endereço, rota e dias sem compra"
   ],
   "module": "Analytics"
 }
