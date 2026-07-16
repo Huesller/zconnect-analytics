@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.5.0",
-  "release": "FUNIL-COMERCIAL-INTELIGENTE",
+  "version": "12.5.1",
+  "release": "FUNIL-COMERCIAL-TAREFAS-RAPIDAS",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -40,7 +40,8 @@
     "Primeira tentativa move automaticamente Novo cliente para Em contato",
     "Registro de cotação enviada move automaticamente o cliente para Cotação enviada",
     "Cartões exibem tentativas, último contato, próxima ação e prioridade por prazo",
-    "Motivo obrigatório ao mover uma oportunidade para Perdido"
+    "Motivo obrigatório ao mover uma oportunidade para Perdido",
+    "Tarefas rápidas com ações comerciais predefinidas e opção de texto livre"
   ],
   "module": "Analytics"
 }

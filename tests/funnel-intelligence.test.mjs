@@ -22,3 +22,8 @@ test("Apps Script aceita a etapa de oportunidade identificada", () => {
   assert.match(appsScript, /"qualified"/);
   assert.match(appsScript, /qualified: true/);
 });
+
+test("tarefas comerciais possuem atalhos e opção livre", () => {
+  for (const title of ["Ligar", "Retornar ligação", "Mensagem WhatsApp", "Retorno de cotação", "Enviar catálogo", "Agendar visita", "Acompanhar pedido"]) assert.match(main, new RegExp(title));
+  assert.match(main, /Outra tarefa/);
+});
