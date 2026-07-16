@@ -1,7 +1,7 @@
 {
   "name": "zconnect-analytics",
   "private": true,
-  "version": "12.5.8",
+  "version": "12.5.9",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",

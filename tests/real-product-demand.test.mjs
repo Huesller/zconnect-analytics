@@ -17,4 +17,7 @@ test("sugestões de busca não são convertidas em demanda de SKU", () => {
   assert.doesNotMatch(backend, /"product_open", "add_to_cart", "whatsapp_quote", "search"/);
   assert.match(frontend, /"searched", "Pesquisas confirmadas"/);
   assert.match(frontend, /noResultDemandRows\(byType\.searches\)/);
+  assert.match(frontend, /inferredNoResults/);
+  assert.match(frontend, /function openSearchTermClients/);
+  assert.match(frontend, /onOpenSearchTerm/);
 });

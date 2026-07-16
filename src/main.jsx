@@ -369,6 +369,7 @@ function normalizeObjectEvent(row, index) {
   const products = parseProducts(readField(row, ["products", "items", "productList"]));
   const cartTotal = safeNumber(readField(row, ["cartTotal", "cart_total", "total", "displayedPrice"], total));
   const itemsCount = safeNumber(readField(row, ["itemsCount", "itemCount", "quantity", "quantidade"], quantity));
+  const rawResultsCount = readField(row, ["resultsCount", "results", "resultCount"], null);
 
   return {
     id: row.id || row.eventId || `row-${index}`,
@@ -394,7 +395,8 @@ function normalizeObjectEvent(row, index) {
     referrer: readField(row, ["referrer"], ""),
     userAgent: readField(row, ["userAgent"], ""),
     searchTimeMs: safeNumber(readField(row, ["searchTimeMs", "search_time", "elapsedMs"])),
-    resultsCount: safeNumber(readField(row, ["resultsCount", "results", "resultCount"])),
+    resultsCount: safeNumber(rawResultsCount),
+    resultsCountKnown: rawResultsCount !== null && rawResultsCount !== "",
     specialOffer: Boolean(readField(row, ["specialOffer"], false)),
     specialOfferId: String(readField(row, ["specialOfferId"], "")).trim(),
     specialOfferSigned: Boolean(readField(row, ["specialOfferSigned"], false)),
@@ -2741,16 +2743,21 @@ function App() {
     });
   }, [filteredReservations]);
 
-  const byType = useMemo(() => ({
-    pageViews: filtered.filter((event) => event.event === "page_view"),
-    searches: filtered.filter((event) => event.event === "search"),
-    noResults: filtered.filter((event) => event.event === "search_no_results"),
-    productOpen: filtered.filter((event) => event.event === "product_open"),
-    added: filtered.filter((event) => event.event === "add_to_cart"),
-    removed: filtered.filter((event) => event.event === "remove_from_cart"),
-    cleared: filtered.filter((event) => event.event === "clear_cart"),
-    quotes: filtered.filter((event) => event.event === "whatsapp_quote")
-  }), [filtered]);
+  const byType = useMemo(() => {
+    const explicitNoResults = filtered.filter((event) => event.event === "search_no_results");
+    const explicitKeys = new Set(explicitNoResults.map((event) => `${event.sessionId}|${String(event.query || "").trim().toLowerCase()}`));
+    const inferredNoResults = filtered.filter((event) => event.event === "search" && event.resultsCountKnown && event.resultsCount === 0 && !explicitKeys.has(`${event.sessionId}|${String(event.query || "").trim().toLowerCase()}`));
+    return {
+      pageViews: filtered.filter((event) => event.event === "page_view"),
+      searches: filtered.filter((event) => event.event === "search"),
+      noResults: [...explicitNoResults, ...inferredNoResults],
+      productOpen: filtered.filter((event) => event.event === "product_open"),
+      added: filtered.filter((event) => event.event === "add_to_cart"),
+      removed: filtered.filter((event) => event.event === "remove_from_cart"),
+      cleared: filtered.filter((event) => event.event === "clear_cart"),
+      quotes: filtered.filter((event) => event.event === "whatsapp_quote")
+    };
+  }, [filtered]);
 
   const allSearchEvents = useMemo(() => [...byType.searches, ...byType.noResults], [byType.searches, byType.noResults]);
 
@@ -2975,6 +2982,12 @@ function App() {
       columns: NO_RESULT_DEMAND_COLUMNS,
       filters: { company: false, consultant: false }
     });
+  }
+
+  function openSearchTermClients(row, missing = false) {
+    const query = String(row?.search || "").trim().toLowerCase();
+    const source = (missing ? byType.noResults : byType.searches).filter((event) => String(event.query || "").trim().toLowerCase() === query);
+    openSearchModal(`${missing ? "Busca sem resultado" : "Pesquisa confirmada"}: ${row?.search || "-"}`, source);
   }
 
   function openQuotedProductsModal() {
@@ -3804,7 +3817,7 @@ function App() {
             { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
             { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
           ]}/>
-          <ProductIntelligenceView searched={confirmedSearches} hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenSearched={openConfirmedSearchesModal} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenStock={openDemandProduct}/>
+          <ProductIntelligenceView searched={confirmedSearches} hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenSearched={openConfirmedSearchesModal} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenSearchTerm={openSearchTermClients} onOpenStock={openDemandProduct}/>
         </div>
       ) : null}
 
@@ -4229,7 +4242,7 @@ function PipelineBoard({ rows = [], activities = [], tasks = [], onOpen, onMove 
   );
 }
 
-function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing = [], stock = [], onOpenSearched, onOpenHot, onOpenQuoted, onOpenMissing, onOpenStock }) {
+function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing = [], stock = [], onOpenSearched, onOpenHot, onOpenQuoted, onOpenMissing, onOpenSearchTerm, onOpenStock }) {
   const [tab, setTab] = useState("searched");
   const [stockFilter, setStockFilter] = useState("all");
   const [stockQuery, setStockQuery] = useState("");
@@ -4261,7 +4274,9 @@ function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing
         const second = isSearchTerm ? row.companies : tab === "stock" ? row.stockQty : row.carts;
         const third = isSearchTerm ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
         const signal = isSearchTerm ? (tab === "missing" ? "Sem resultado" : "Busca confirmada") : tab === "stock" ? row.signal : `${row.score || 0} pts`;
-        return <div className={`product-readable-row ${tab === "stock" ? "clickable-demand" : ""}`} role={tab === "stock" ? "button" : undefined} tabIndex={tab === "stock" ? 0 : undefined} onClick={tab === "stock" ? () => onOpenStock?.(row) : undefined} onKeyDown={tab === "stock" ? (event) => { if (event.key === "Enter") onOpenStock?.(row); } : undefined} key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
+        const clickable = tab === "stock" || isSearchTerm;
+        const openRow = () => tab === "stock" ? onOpenStock?.(row) : onOpenSearchTerm?.(row, tab === "missing");
+        return <div className={`product-readable-row ${clickable ? "clickable-demand" : ""}`} role={clickable ? "button" : undefined} tabIndex={clickable ? 0 : undefined} onClick={clickable ? openRow : undefined} onKeyDown={clickable ? (event) => { if (event.key === "Enter") openRow(); } : undefined} key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
       })}
       {!rows.length ? <EmptyState message="Sem dados para esta leitura no período."/> : null}
     </div>

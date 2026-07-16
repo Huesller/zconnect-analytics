@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.5.8",
-  "release": "PESQUISA-E-DEMANDA-SEPARADAS",
+  "version": "12.5.9",
+  "release": "CLIENTES-POR-PESQUISA",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -53,7 +53,9 @@
     "Termos confirmados agora aparecem em Mais pesquisados sem contaminar demanda de estoque",
     "Produtos acessados permanecem em um ranking separado das pesquisas",
     "Pesquisas confirmadas possuem aba própria com o termo exato enviado pelo cliente",
-    "Demanda x estoque considera interação real com produto, sem misturar resultados parecidos"
+    "Demanda x estoque considera interação real com produto, sem misturar resultados parecidos",
+    "Buscas sem produto direto são reconhecidas mesmo quando existem sugestões",
+    "Linhas de pesquisa abrem a lista de clientes, consultores e horários envolvidos"
   ],
   "module": "Analytics"
 }
