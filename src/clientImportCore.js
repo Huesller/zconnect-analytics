@@ -24,7 +24,12 @@ const EXCEL_ALIASES = {
   email: ["email", "e-mail"],
   city: ["municipio", "cidade"], state: ["uf", "estado"],
   address: ["endereco", "logradouro"], route: ["rotas", "rota"],
-  daysWithoutPurchase: ["s/ comprar", "sem comprar", "dias sem comprar", "dias sem compra"]
+  daysWithoutPurchase: ["s/ comprar", "sem comprar", "dias sem comprar", "dias sem compra"],
+  lastPurchaseAt: ["data ultima compra", "ultima compra", "data da ultima compra", "last purchase"],
+  lastPurchaseValue: ["valor ultima compra", "valor da ultima compra"],
+  purchaseTotal: ["total comprado", "valor total comprado", "compras total"],
+  purchaseCount: ["quantidade compras", "qtd compras", "numero de compras"],
+  averagePurchaseIntervalDays: ["intervalo medio compras", "frequencia media", "ciclo medio dias"]
 };
 
 export function normalizedText(value) {
@@ -45,6 +50,13 @@ export function formatPhone(value) {
   if (number.length === 11) return number.replace(/^(\d{2})(\d{5})(\d{4})$/, "($1) $2-$3");
   if (number.length === 10) return number.replace(/^(\d{2})(\d{4})(\d{4})$/, "($1) $2-$3");
   return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function parseDecimal(value) {
+  const text = String(value || "").replace(/R\$/gi, "").replace(/\s/g, "");
+  if (!text) return 0;
+  const normalized = text.includes(",") ? text.replace(/\./g, "").replace(",", ".") : text;
+  return Number(normalized.replace(/[^0-9.-]/g, "")) || 0;
 }
 
 function cleanCell(items, compact = false) {
@@ -158,6 +170,10 @@ export function parseExcelMatrix(matrix) {
     row.taxId = formatTaxId(row.taxId);
     row.phone = formatPhone(row.phone);
     row.daysWithoutPurchase = Number(String(row.daysWithoutPurchase || "").replace(/\D/g, "") || 0);
+    row.lastPurchaseValue = parseDecimal(row.lastPurchaseValue);
+    row.purchaseTotal = parseDecimal(row.purchaseTotal);
+    row.purchaseCount = Number(String(row.purchaseCount || "").replace(/\D/g, "") || 0);
+    row.averagePurchaseIntervalDays = Number(String(row.averagePurchaseIntervalDays || "").replace(/\D/g, "") || 0);
     row.state = String(row.state || "").slice(0, 2).toUpperCase();
     return row;
   }).filter((row) => row.companyName && (row.customerCode || row.taxId));

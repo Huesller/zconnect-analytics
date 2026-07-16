@@ -95,6 +95,11 @@ const CRM_CLIENT_HEADERS = [
   "address",
   "route",
   "daysWithoutPurchase",
+  "lastPurchaseAt",
+  "lastPurchaseValue",
+  "purchaseTotal",
+  "purchaseCount",
+  "averagePurchaseIntervalDays",
   "segment",
   "status",
   "owner",
@@ -133,6 +138,9 @@ const CRM_ACTIVITY_HEADERS = [
   "value",
   "reason",
   "note",
+  "nextAction",
+  "nextActionAt",
+  "actionStatus",
   "owner",
   "createdAt",
   "updatedAt",
@@ -1125,6 +1133,9 @@ function appendCrmActivity_(record) {
     value: number_(record.value || 0),
     reason: String(record.reason || "").trim().slice(0, 180),
     note: String(record.note || "").trim().slice(0, 1000),
+    nextAction: String(record.nextAction || "").trim().slice(0, 240),
+    nextActionAt: String(record.nextActionAt || "").trim().slice(0, 40),
+    actionStatus: ["pending", "done"].indexOf(String(record.actionStatus || "")) >= 0 ? String(record.actionStatus) : (record.nextAction ? "pending" : ""),
     owner: String(record.owner || "").trim().slice(0, 80),
     createdAt: record.createdAt || now,
     updatedAt: record.updatedAt || "",
@@ -1186,6 +1197,11 @@ function upsertCrmClient_(data) {
   const address = String(data.address || data.endereco || "").trim().replace(/\s+/g, " ").slice(0, 300);
   const route = String(data.route || data.rota || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const daysWithoutPurchase = Math.max(0, Math.floor(number_(data.daysWithoutPurchase || data.diasSemComprar || 0)));
+  const lastPurchaseAt = String(data.lastPurchaseAt || data.dataUltimaCompra || "").trim().slice(0, 40);
+  const lastPurchaseValue = Math.max(0, number_(data.lastPurchaseValue || data.valorUltimaCompra || 0));
+  const purchaseTotal = Math.max(0, number_(data.purchaseTotal || data.totalComprado || 0));
+  const purchaseCount = Math.max(0, Math.floor(number_(data.purchaseCount || data.quantidadeCompras || 0)));
+  const averagePurchaseIntervalDays = Math.max(0, Math.floor(number_(data.averagePurchaseIntervalDays || data.intervaloMedioCompras || 0)));
   const segment = String(data.segment || "").trim().replace(/\s+/g, " ").slice(0, 120);
   const ownerRaw = String(data.owner || data.consultant || "").trim();
   const owner = ownerRaw ? normalizeConsultor_(ownerRaw).slice(0, 80) : "";
@@ -1238,6 +1254,11 @@ function upsertCrmClient_(data) {
       address: address || previousRecord.address || "",
       route: route || previousRecord.route || "",
       daysWithoutPurchase: daysWithoutPurchase || previousRecord.daysWithoutPurchase || 0,
+      lastPurchaseAt: lastPurchaseAt || previousRecord.lastPurchaseAt || "",
+      lastPurchaseValue: lastPurchaseValue || previousRecord.lastPurchaseValue || 0,
+      purchaseTotal: purchaseTotal || previousRecord.purchaseTotal || 0,
+      purchaseCount: purchaseCount || previousRecord.purchaseCount || 0,
+      averagePurchaseIntervalDays: averagePurchaseIntervalDays || previousRecord.averagePurchaseIntervalDays || 0,
       segment: segment,
       status: status,
       owner: owner,
@@ -1330,6 +1351,11 @@ function importCrmClients_(data) {
         address: String(source.address || source.endereco || "").trim().replace(/\s+/g, " ").slice(0, 300),
         route: String(source.route || source.rota || "").trim().replace(/\s+/g, " ").slice(0, 120),
         daysWithoutPurchase: Math.max(0, Math.floor(number_(source.daysWithoutPurchase || 0))),
+        lastPurchaseAt: String(source.lastPurchaseAt || "").trim().slice(0, 40),
+        lastPurchaseValue: Math.max(0, number_(source.lastPurchaseValue || 0)),
+        purchaseTotal: Math.max(0, number_(source.purchaseTotal || 0)),
+        purchaseCount: Math.max(0, Math.floor(number_(source.purchaseCount || 0))),
+        averagePurchaseIntervalDays: Math.max(0, Math.floor(number_(source.averagePurchaseIntervalDays || 0))),
         segment: String(source.segment || "").trim().replace(/\s+/g, " ").slice(0, 120),
         owner: String(source.owner || "").trim() ? normalizeConsultor_(source.owner).slice(0, 80) : ""
       };
@@ -1450,6 +1476,9 @@ function recordCrmActivity_(data) {
     value: data.value,
     reason: data.reason,
     note: data.note,
+    nextAction: data.nextAction,
+    nextActionAt: data.nextActionAt,
+    actionStatus: data.actionStatus,
     owner: data.owner
   });
   return { ok: true, activity: activity };
@@ -1471,6 +1500,9 @@ function updateCrmActivity_(data) {
       headers.forEach(function(header, columnIndex) { record[header] = values[index][columnIndex]; });
       record.type = String(data.type || record.type || "note").trim().slice(0, 40);
       record.note = String(data.note || "").trim().slice(0, 1000);
+      record.nextAction = String(data.nextAction !== undefined ? data.nextAction : (record.nextAction || "")).trim().slice(0, 240);
+      record.nextActionAt = String(data.nextActionAt !== undefined ? data.nextActionAt : (record.nextActionAt || "")).trim().slice(0, 40);
+      record.actionStatus = ["pending", "done"].indexOf(String(data.actionStatus || "")) >= 0 ? String(data.actionStatus) : (record.nextAction ? String(record.actionStatus || "pending") : "");
       record.updatedAt = new Date();
       const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
       sheet.getRange(index + 1, 1, 1, headers.length).setValues([row]);
