@@ -2053,6 +2053,24 @@ function clearEvents_(data) {
   return { ok: true, cleared: true, clearedRows: rowsToDelete };
 }
 
+function factoryResetCommercial_(data) {
+  if (!validateAdminAccess_(data)) return { ok: false, error: "unauthorized" };
+  if (String(data.confirmation || "").trim().toUpperCase() !== "ZERAR TUDO") return { ok: false, error: "invalid_confirmation" };
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (err) { return { ok: false, error: "reset_busy" }; }
+  try {
+    const targets = [[EVENTS_SHEET, EVENT_HEADERS], [OFFERS_SHEET, OFFER_HEADERS], [RESERVATIONS_SHEET, RESERVATION_HEADERS], [CRM_CLIENTS_SHEET, CRM_CLIENT_HEADERS], [CRM_TASKS_SHEET, CRM_TASK_HEADERS], [CRM_ACTIVITIES_SHEET, CRM_ACTIVITY_HEADERS], [CRM_SETTINGS_SHEET, CRM_SETTING_HEADERS]];
+    const cleared = {};
+    targets.forEach(function(target) {
+      const sheet = getStructuredSheet_(target[0], target[1]);
+      const rows = Math.max(0, sheet.getLastRow() - 1);
+      if (rows) sheet.getRange(2, 1, rows, Math.max(sheet.getLastColumn(), target[1].length)).clearContent();
+      cleared[target[0]] = rows;
+    });
+    return { ok: true, reset: true, cleared: cleared, preserved: [CATALOG_PRODUCTS_SHEET, CATALOG_SNAPSHOTS_SHEET] };
+  } finally { lock.releaseLock(); }
+}
+
 function doPost(e) {
   const data = parseBody_(e);
   const action = data.action || "track";
@@ -2081,7 +2099,8 @@ function doPost(e) {
     delete_company_data: true,
     clear_events: true,
     reset: true,
-    clear: true
+    clear: true,
+    factory_reset_commercial: true
   };
   if (adminActions[action] && !validateAdminAccess_(data)) return jsonOutput({ ok: false, error: "unauthorized" });
 
@@ -2100,6 +2119,7 @@ function doPost(e) {
   if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
   if (action === "delete_company_data") return jsonOutput(deleteCompanyData_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
+  if (action === "factory_reset_commercial") return jsonOutput(factoryResetCommercial_(data));
 
   return jsonOutput({ ok: false, error: "invalid_action" });
 }

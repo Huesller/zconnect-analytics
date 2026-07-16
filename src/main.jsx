@@ -2554,6 +2554,7 @@ function App() {
   const [eventFilter, setEventFilter] = useState("all");
   const [productFilter, setProductFilter] = useState("");
   const [resetStatus, setResetStatus] = useState("");
+  const [factoryResetText, setFactoryResetText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
@@ -3516,6 +3517,24 @@ function App() {
     }
   }
 
+  async function handleFactoryReset() {
+    if (factoryResetText.trim().toUpperCase() !== "ZERAR TUDO" || isResetting) return;
+    const confirmed = window.confirm("CONFIRMAÇÃO FINAL: apagar clientes, funil, tarefas, anotações, eventos, carrinhos, ofertas e configurações comerciais? Esta ação não pode ser desfeita.");
+    if (!confirmed) return;
+    setIsResetting(true); setResetStatus("Executando o Dia Zero...");
+    try {
+      await postAnalyticsAction("factory_reset_commercial", { confirmation: factoryResetText });
+      setEvents([]); setReservations([]); setCrmClients([]); setCrmTasks([]); setCrmActivities([]); setCrmSettings({});
+      setSelectedClient(null); setFactoryResetText(""); setPeriod("all"); setCompany("all"); setConsultant("all");
+      setResetStatus("Dia Zero concluído. A base comercial está vazia e pronta para importar os clientes.");
+      showToast("Base comercial zerada com sucesso.");
+      await load({ silent: true });
+    } catch (error) {
+      setResetStatus(error.message || "Não foi possível concluir o reset total.");
+      showToast(error.message || "Falha no reset total.", "error");
+    } finally { setIsResetting(false); }
+  }
+
   if (authStatus === "checking") {
     return <main className="login-page"><section className="login-card auth-checking"><RefreshCw className="spin"/><h1>Validando sessão</h1><p>Preparando a inteligência comercial...</p></section></main>;
   }
@@ -3859,6 +3878,12 @@ function App() {
             </article>
           </section>
           <CompanyDataManager companies={companyAdminOptions} busy={isCleaning} onMerge={handleManualMerge} onDelete={handleCompanyDataDeletion}/>
+          <article className="panel factory-reset-panel">
+            <div className="panel-head"><div><h2><Trash2 size={18}/> Dia Zero — apagar toda a base comercial</h2><p>Remove clientes, funil, tarefas, anotações, históricos, eventos, carrinhos, ofertas e metas. Produtos e catálogo são preservados.</p></div><span>Somente administrador</span></div>
+            <div className="factory-reset-warning"><AlertTriangle size={20}/><span><strong>Irreversível.</strong> Digite <b>ZERAR TUDO</b> exatamente como aparece para liberar o botão.</span></div>
+            <div className="factory-reset-actions"><input value={factoryResetText} onChange={(event) => setFactoryResetText(event.target.value)} placeholder="Digite ZERAR TUDO" autoComplete="off"/><button type="button" className="danger-button" disabled={isResetting || factoryResetText.trim().toUpperCase() !== "ZERAR TUDO"} onClick={handleFactoryReset}>{isResetting ? <RefreshCw className="spin" size={17}/> : <Trash2 size={17}/>} Apagar e começar do zero</button></div>
+            {resetStatus ? <p className="factory-reset-status">{resetStatus}</p> : null}
+          </article>
           {qualityStatus ? <div className="quality-status" role="status">{qualityStatus}</div> : null}
         </div>
       ) : null}

@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.3.2",
-  "release": "PARSER-SEMANTICO-PDF-SIGGMA",
+  "version": "12.4.1",
+  "release": "DIA-ZERO-E-CORRECAO-DE-CAMPOS",
   "build": "2026-07-16",
   "environment": "production",
   "notes": [
@@ -28,7 +28,11 @@
     "Pedidos fechados removidos da fila de carrinhos que precisam de contato",
     "Importação de carteira por PDF SIGGMA, XLSX, XLSM ou CSV com prévia e validação",
     "Tratamento seguro de duplicidades, backup automático e atualização em lote",
-    "Cliente 360 ampliado com CPF/CNPJ, UF, endereço, rota e dias sem compra"
+    "Cliente 360 ampliado com CPF/CNPJ, UF, endereço, rota e dias sem compra",
+    "Central de anotações com próximas ações e exportação Excel",
+    "Última compra, valor, frequência e classificação comercial automática",
+    "Reset administrativo Dia Zero para apagar toda a base comercial",
+    "Campos de anotações e datas corrigidos para fundo claro e texto legível"
   ],
   "module": "Analytics"
 }
