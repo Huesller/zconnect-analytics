@@ -548,6 +548,8 @@ async function postAnalyticsAction(action, payload = {}) {
   if (!response.ok || !data?.ok) {
     if (response.status === 401 || data?.error === "unauthorized") throw new Error("unauthorized");
     if (data?.error === "invalid_pin") throw new Error("PIN administrativo inválido.");
+    if (data?.error === "client_outside_user_scope") throw new Error("Este cliente pertence à carteira de outro vendedor. Peça ao administrador para revisar o responsável.");
+    if (data?.error === "all_clients_outside_user_scope") throw new Error("Todos os clientes desta lista já pertencem à carteira de outro vendedor. Peça ao administrador para revisar os responsáveis.");
     throw new Error(data?.error || "Não foi possível concluir a operação.");
   }
   return data;
@@ -3166,7 +3168,8 @@ function App() {
       });
       await load({ silent: true });
       setIsClientImportOpen(false);
-      showToast(`${result.created || 0} cliente(s) criado(s) e ${result.updated || 0} atualizado(s). Backup: ${result.backupSheet || "não necessário"}.`);
+      const scopeMessage = result.scopeSkipped ? ` ${result.scopeSkipped} cliente(s) que já pertencem a outro vendedor foram ignorados com segurança.` : "";
+      showToast(`${result.created || 0} cliente(s) criado(s) e ${result.updated || 0} atualizado(s).${scopeMessage} Backup: ${result.backupSheet || "não necessário"}.`);
       return result;
     } catch (error) {
       showToast(error.message || "Não foi possível importar a carteira.", "error");

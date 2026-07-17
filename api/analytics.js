@@ -31,6 +31,34 @@ function normalizeCompanyKey(value) {
   return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function findMatchingClient(existing, requested) {
+  const key = normalizeCompanyKey(requested.companyKey || requested.companyName);
+  const code = String(requested.customerCode || "").trim().toLowerCase();
+  const tax = String(requested.taxId || "").replace(/\D/g, "");
+  return existing.find((client) => (
+    (key && normalizeCompanyKey(client.companyKey || client.companyName) === key)
+    || (code && String(client.customerCode || "").trim().toLowerCase() === code)
+    || (tax && String(client.taxId || "").replace(/\D/g, "") === tax)
+  ));
+}
+
+async function scopeImportClients(apiUrl, adminToken, body, profile, signal) {
+  const clients = Array.isArray(body.clients) ? body.clients : [];
+  if (!clients.length || clients.length > 2000) return { allowed: [], conflicts: [] };
+  const permittedOwners = allowedConsultants(profile);
+  const data = await readUpstream(apiUrl, adminToken, "crm_clients", signal);
+  const existing = data.clients || [];
+  return clients.reduce((result, requested) => {
+    const match = findMatchingClient(existing, requested);
+    if (!match || permittedOwners.has(rowConsultant(match))) result.allowed.push(requested);
+    else result.conflicts.push({
+      companyName: requested.companyName || match.companyName || "Cliente sem nome",
+      customerCode: requested.customerCode || match.customerCode || ""
+    });
+    return result;
+  }, { allowed: [], conflicts: [] });
+}
+
 async function readUpstream(apiUrl, adminToken, action, signal) {
   const url = new URL(apiUrl);
   url.searchParams.set("action", action);
@@ -44,21 +72,7 @@ async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, s
   if (isAdmin(profile)) return true;
   const allowed = allowedConsultants(profile);
   if (action === "import_crm_clients") {
-    const clients = Array.isArray(body.clients) ? body.clients : [];
-    if (!clients.length || clients.length > 2000) return false;
-    const data = await readUpstream(apiUrl, adminToken, "crm_clients", signal);
-    const existing = data.clients || [];
-    return clients.every((requested) => {
-      const key = normalizeCompanyKey(requested.companyKey || requested.companyName);
-      const code = String(requested.customerCode || "").trim().toLowerCase();
-      const tax = String(requested.taxId || "").replace(/\D/g, "");
-      const match = existing.find((client) => (
-        (key && normalizeCompanyKey(client.companyKey || client.companyName) === key)
-        || (code && String(client.customerCode || "").trim().toLowerCase() === code)
-        || (tax && String(client.taxId || "").replace(/\D/g, "") === tax)
-      ));
-      return !match || allowed.has(rowConsultant(match));
-    });
+    return Array.isArray(body.clients) && body.clients.length > 0 && body.clients.length <= 2000;
   }
   if (["complete_crm_task", "cancel_crm_task"].includes(action)) {
     const data = await readUpstream(apiUrl, adminToken, "crm_tasks", signal);
@@ -120,6 +134,7 @@ export default async function handler(req, res) {
     const timeout = setTimeout(() => controller.abort(), 55000);
     let response;
     let action = "";
+    let scopeConflicts = [];
     if (req.method === "GET") {
       const url = new URL(apiUrl);
       Object.entries(req.query || {}).forEach(([key, value]) => {
@@ -136,6 +151,15 @@ export default async function handler(req, res) {
       action = String(body.action || "");
       if (!isAdmin(profile) && ADMIN_ONLY_ACTIONS.has(action)) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "forbidden" }); }
       if (!isAdmin(profile)) {
+        if (action === "import_crm_clients") {
+          const scoped = await scopeImportClients(apiUrl, adminToken, body, profile, controller.signal);
+          scopeConflicts = scoped.conflicts;
+          body.clients = scoped.allowed;
+          if (!body.clients.length) {
+            clearTimeout(timeout);
+            return json(res, 409, { ok: false, error: "all_clients_outside_user_scope", scopeSkipped: scopeConflicts.length });
+          }
+        }
         const canWrite = await canWriteScopedRecord(apiUrl, adminToken, action, body, profile, controller.signal);
         if (!canWrite) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "client_outside_user_scope" }); }
         const primaryConsultant = [...allowedConsultants(profile)][0] || profile.username;
@@ -160,6 +184,10 @@ export default async function handler(req, res) {
     const text = await response.text();
     let data;
     try { data = JSON.parse(text); } catch { return json(res, 502, { ok: false, error: "invalid_analytics_response" }); }
+    if (scopeConflicts.length && data && typeof data === "object") {
+      data.scopeSkipped = scopeConflicts.length;
+      data.scopeConflicts = scopeConflicts.slice(0, 20);
+    }
     return json(res, response.ok ? 200 : 502, scopePayload(action, data, profile));
   } catch (error) {
     return json(res, 502, { ok: false, error: error?.name === "AbortError" ? "analytics_timeout" : "analytics_unavailable" });
