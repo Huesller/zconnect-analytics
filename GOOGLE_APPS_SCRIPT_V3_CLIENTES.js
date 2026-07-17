@@ -5,6 +5,9 @@ const CRM_CLIENTS_SHEET = "CRM_CLIENTS";
 const CRM_TASKS_SHEET = "CRM_TASKS";
 const CRM_ACTIVITIES_SHEET = "CRM_ACTIVITIES";
 const CRM_SETTINGS_SHEET = "CRM_SETTINGS";
+const CRM_ALIASES_SHEET = "CRM_ALIASES";
+const CRM_QUOTES_SHEET = "CRM_QUOTES";
+const CRM_QUOTE_ITEMS_SHEET = "CRM_QUOTE_ITEMS";
 const CATALOG_SNAPSHOTS_SHEET = "CATALOG_SNAPSHOTS";
 const CATALOG_PRODUCTS_SHEET = "CATALOG_PRODUCTS";
 const ACTIVE_RESERVATION_TTL_MS = 20 * 60 * 1000;
@@ -148,6 +151,9 @@ const CRM_ACTIVITY_HEADERS = [
 ];
 
 const CRM_SETTING_HEADERS = ["key", "value", "updatedAt"];
+const CRM_ALIAS_HEADERS = ["aliasKey", "aliasName", "canonicalKey", "canonicalName", "owner", "createdAt", "updatedAt"];
+const CRM_QUOTE_HEADERS = ["quoteId", "externalNumber", "companyKey", "companyName", "customerCode", "taxId", "owner", "status", "issueAt", "itemsCount", "quantity", "subtotal", "total", "source", "fileName", "version", "lostReason", "createdAt", "updatedAt", "closedAt"];
+const CRM_QUOTE_ITEM_HEADERS = ["quoteId", "lineNumber", "productCode", "description", "quantity", "unitPrice", "ipi", "total"];
 
 const CATALOG_SNAPSHOT_HEADERS = [
   "snapshotId",
@@ -320,6 +326,19 @@ function getCrmSettingsSheet_() {
   return getStructuredSheet_(CRM_SETTINGS_SHEET, CRM_SETTING_HEADERS);
 }
 
+function getCrmAliasesSheet_() { return getStructuredSheet_(CRM_ALIASES_SHEET, CRM_ALIAS_HEADERS); }
+function getCrmQuotesSheet_() { return getStructuredSheet_(CRM_QUOTES_SHEET, CRM_QUOTE_HEADERS); }
+function getCrmQuoteItemsSheet_() { return getStructuredSheet_(CRM_QUOTE_ITEMS_SHEET, CRM_QUOTE_ITEM_HEADERS); }
+
+function resolveCompanyAlias_(value) {
+  const name = String(value || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const key = normalizeCompanyKey_(name);
+  if (!key) return name;
+  const aliases = readStructuredRows_(getCrmAliasesSheet_(), "alias");
+  const match = aliases.find(function(item) { return String(item.aliasKey || "") === key; });
+  return match ? String(match.canonicalName || name) : name;
+}
+
 function getCatalogSnapshotsSheet_() {
   return getStructuredSheet_(CATALOG_SNAPSHOTS_SHEET, CATALOG_SNAPSHOT_HEADERS);
 }
@@ -469,7 +488,7 @@ function appendEvent_(data) {
   const sheet = getEventsSheet_();
   const headers = getHeaders_(sheet);
   const consultor = normalizeConsultor_(data.consultor || data.consultant || data.consultant_slug);
-  const companyName = normalizeCompany_(data);
+  const companyName = resolveCompanyAlias_(normalizeCompany_(data));
   const clientId = data.clientId || data.clienteId || data.customerId || data.sessionId || "";
   const event = normalizeEvent_(data.event);
   const timestamp = data.timestamp || data.createdAt || new Date().toISOString();
@@ -824,7 +843,7 @@ function syncReservations_(data) {
   if (!sessionId) return { ok: false, error: "invalid_session" };
 
   const items = normalizeReservationItems_(data.items);
-  const companyName = normalizeCompany_(data).replace(/\s+/g, " ").slice(0, 120);
+  const companyName = resolveCompanyAlias_(normalizeCompany_(data)).replace(/\s+/g, " ").slice(0, 120);
   const consultant = normalizeConsultor_(data.consultant || data.consultor);
   const now = new Date();
   const lock = LockService.getScriptLock();
@@ -986,6 +1005,55 @@ function releaseReservations_(data) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function closeCommercialCart_(data) {
+  const outcome = String(data.outcome || data.status || "").toLowerCase();
+  if (["won", "lost"].indexOf(outcome) < 0) return { ok: false, error: "invalid_outcome" };
+  const companyKey = normalizeCompanyKey_(data.companyKey || data.companyName);
+  const sessionId = normalizeReservationSessionId_(data.sessionId);
+  if (!companyKey && !sessionId) return { ok: false, error: "invalid_company" };
+  const now = new Date();
+  const lock = LockService.getScriptLock();
+  try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "reservation_busy" }; }
+  try {
+    const sheet = getReservationsSheet_();
+    const loaded = readReservationRecords_(sheet);
+    let changed = 0;
+    loaded.records.forEach(function(record) {
+      const sameSession = sessionId && String(record.sessionId || "") === sessionId;
+      const sameCompany = companyKey && normalizeCompanyKey_(resolveCompanyAlias_(record.companyName)) === companyKey;
+      if (!sameSession && !sameCompany) return;
+      if (["active", "quoted"].indexOf(String(record.status || "")) < 0) return;
+      record.status = outcome;
+      record.updatedAt = now;
+      record.expiresAt = now;
+      record.reservedQty = 0;
+      record.excessQty = 0;
+      changed++;
+    });
+    writeReservationRecords_(sheet, loaded.headers, loaded.records);
+
+    const quotesSheet = getCrmQuotesSheet_();
+    const values = quotesSheet.getDataRange().getValues();
+    const headers = values[0].map(String);
+    const keyIndex = headers.indexOf("companyKey");
+    const statusIndex = headers.indexOf("status");
+    const reasonIndex = headers.indexOf("lostReason");
+    const updatedIndex = headers.indexOf("updatedAt");
+    const closedIndex = headers.indexOf("closedAt");
+    let closedQuotes = 0;
+    values.slice(1).forEach(function(row) {
+      if (normalizeCompanyKey_(row[keyIndex]) !== companyKey || ["won", "lost"].indexOf(String(row[statusIndex])) >= 0) return;
+      row[statusIndex] = outcome;
+      row[reasonIndex] = outcome === "lost" ? String(data.reason || "Outro").slice(0, 180) : "";
+      row[updatedIndex] = now;
+      row[closedIndex] = now;
+      closedQuotes++;
+    });
+    if (closedQuotes) replaceEventRows_(quotesSheet, headers, values.slice(1));
+    return { ok: true, outcome: outcome, closedReservations: changed, closedQuotes: closedQuotes };
+  } finally { lock.releaseLock(); }
 }
 
 function getPublicReservations_(sessionIdValue) {
@@ -1171,6 +1239,81 @@ function readCrmActivities_() {
     .sort(function(a, b) { return reservationDate_(b.createdAt).getTime() - reservationDate_(a.createdAt).getTime(); })
     .slice(0, 5000);
   return { ok: true, activities: activities };
+}
+
+function readCrmAliases_() { return { ok: true, aliases: readStructuredRows_(getCrmAliasesSheet_(), "alias") }; }
+function readCrmQuotes_() {
+  return {
+    ok: true,
+    quotes: readStructuredRows_(getCrmQuotesSheet_(), "quote").filter(function(item) { return String(item.quoteId || "").trim(); }),
+    items: readStructuredRows_(getCrmQuoteItemsSheet_(), "quote-item").filter(function(item) { return String(item.quoteId || "").trim(); })
+  };
+}
+
+function upsertExternalQuote_(data) {
+  const quote = data.quote || {};
+  const externalNumber = String(quote.externalNumber || "").trim().slice(0, 80);
+  const companyName = resolveCompanyAlias_(data.companyName || quote.companyName);
+  const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
+  if (!externalNumber || !companyKey) return { ok: false, error: "invalid_quote" };
+  const now = new Date();
+  const sheet = getCrmQuotesSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(String);
+  const extIndex = headers.indexOf("externalNumber");
+  const keyIndex = headers.indexOf("companyKey");
+  let rowIndex = -1;
+  values.slice(1).forEach(function(row, index) {
+    if (String(row[extIndex] || "") === externalNumber && normalizeCompanyKey_(row[keyIndex]) === companyKey) rowIndex = index + 1;
+  });
+  const previous = rowIndex >= 1 ? values[rowIndex] : [];
+  const previousRecord = {};
+  headers.forEach(function(header, index) { previousRecord[header] = previous[index]; });
+  const quoteId = String(previousRecord.quoteId || uniqueId_("QUOTE"));
+  const items = Array.isArray(quote.items) ? quote.items.slice(0, 500) : [];
+  const quantity = items.reduce(function(sum, item) { return sum + number_(item.quantity || 0); }, 0);
+  const record = {
+    quoteId: quoteId, externalNumber: externalNumber, companyKey: companyKey, companyName: companyName,
+    customerCode: String(quote.customerCode || "").slice(0, 80), taxId: String(quote.taxId || "").slice(0, 40),
+    owner: String(data.owner || quote.owner || "").slice(0, 80), status: String(previousRecord.status || "open") === "open" ? "open" : String(previousRecord.status),
+    issueAt: quote.issueAt || "", itemsCount: items.length, quantity: quantity,
+    subtotal: number_(quote.subtotal || quote.total || 0), total: number_(quote.total || 0), source: "pdf",
+    fileName: String(quote.fileName || "").slice(0, 180), version: number_(previousRecord.version || 0) + 1,
+    lostReason: previousRecord.lostReason || "", createdAt: previousRecord.createdAt || now, updatedAt: now, closedAt: previousRecord.closedAt || ""
+  };
+  const output = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+  if (rowIndex >= 1) sheet.getRange(rowIndex + 1, 1, 1, headers.length).setValues([output]);
+  else sheet.appendRow(output);
+
+  const itemSheet = getCrmQuoteItemsSheet_();
+  const itemValues = itemSheet.getDataRange().getValues();
+  const itemHeaders = itemValues[0].map(String);
+  const itemQuoteIndex = itemHeaders.indexOf("quoteId");
+  const kept = itemValues.slice(1).filter(function(row) { return String(row[itemQuoteIndex] || "") !== quoteId; });
+  items.forEach(function(item, index) {
+    const itemRecord = { quoteId: quoteId, lineNumber: index + 1, productCode: String(item.productCode || "").slice(0, 80), description: String(item.description || "").slice(0, 500), quantity: number_(item.quantity || 0), unitPrice: number_(item.unitPrice || 0), ipi: number_(item.ipi || 0), total: number_(item.total || 0) };
+    kept.push(itemHeaders.map(function(header) { return itemRecord[header] !== undefined ? itemRecord[header] : ""; }));
+  });
+  replaceEventRows_(itemSheet, itemHeaders, kept);
+  return { ok: true, quote: record, items: items, updated: rowIndex >= 1 };
+}
+
+function mergeCrmClients_(data) {
+  const sourceName = String(data.sourceName || "").trim();
+  const targetName = String(data.targetName || "").trim();
+  if (!sourceName || !targetName || normalizeCompanyKey_(sourceName) === normalizeCompanyKey_(targetName)) return { ok: false, error: "invalid_merge" };
+  const result = mergeCompanies_({ adminToken: data.adminToken, merges: [{ sourceName: sourceName, targetName: targetName }] });
+  if (!result.ok && result.error !== "nothing_to_merge") return result;
+  const sheet = getCrmAliasesSheet_();
+  const rows = readStructuredRows_(sheet, "alias");
+  const key = normalizeCompanyKey_(sourceName);
+  const existing = rows.find(function(item) { return String(item.aliasKey || "") === key; });
+  const now = new Date();
+  const record = { aliasKey: key, aliasName: sourceName, canonicalKey: normalizeCompanyKey_(targetName), canonicalName: targetName, owner: String(data.owner || "").slice(0, 80), createdAt: existing ? existing.createdAt : now, updatedAt: now };
+  const headers = getHeaders_(sheet);
+  const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+  if (existing) sheet.getRange(Number(String(existing.id).split("-").pop()), 1, 1, headers.length).setValues([row]); else sheet.appendRow(row);
+  return { ok: true, alias: record, mergedEvents: result.mergedEvents || 0, backupSheet: result.backupSheet || "" };
 }
 
 function readCrmSettings_() {
@@ -2069,7 +2212,7 @@ function factoryResetCommercial_(data) {
   const lock = LockService.getScriptLock();
   try { lock.waitLock(20000); } catch (err) { return { ok: false, error: "reset_busy" }; }
   try {
-    const targets = [[EVENTS_SHEET, EVENT_HEADERS], [OFFERS_SHEET, OFFER_HEADERS], [RESERVATIONS_SHEET, RESERVATION_HEADERS], [CRM_CLIENTS_SHEET, CRM_CLIENT_HEADERS], [CRM_TASKS_SHEET, CRM_TASK_HEADERS], [CRM_ACTIVITIES_SHEET, CRM_ACTIVITY_HEADERS], [CRM_SETTINGS_SHEET, CRM_SETTING_HEADERS]];
+    const targets = [[EVENTS_SHEET, EVENT_HEADERS], [OFFERS_SHEET, OFFER_HEADERS], [RESERVATIONS_SHEET, RESERVATION_HEADERS], [CRM_CLIENTS_SHEET, CRM_CLIENT_HEADERS], [CRM_TASKS_SHEET, CRM_TASK_HEADERS], [CRM_ACTIVITIES_SHEET, CRM_ACTIVITY_HEADERS], [CRM_SETTINGS_SHEET, CRM_SETTING_HEADERS], [CRM_ALIASES_SHEET, CRM_ALIAS_HEADERS], [CRM_QUOTES_SHEET, CRM_QUOTE_HEADERS], [CRM_QUOTE_ITEMS_SHEET, CRM_QUOTE_ITEM_HEADERS]];
     const cleared = {};
     targets.forEach(function(target) {
       const sheet = getStructuredSheet_(target[0], target[1]);
@@ -2106,6 +2249,9 @@ function doPost(e) {
     update_crm_settings: true,
     cleanup_selected_companies: true,
     merge_companies: true,
+    merge_crm_clients: true,
+    upsert_external_quote: true,
+    close_commercial_cart: true,
     delete_company_data: true,
     clear_events: true,
     reset: true,
@@ -2127,6 +2273,9 @@ function doPost(e) {
   if (action === "update_crm_settings") return jsonOutput(updateCrmSettings_(data));
   if (action === "cleanup_selected_companies") return jsonOutput(cleanupSelectedCompanies_(data));
   if (action === "merge_companies") return jsonOutput(mergeCompanies_(data));
+  if (action === "merge_crm_clients") return jsonOutput(mergeCrmClients_(data));
+  if (action === "upsert_external_quote") return jsonOutput(upsertExternalQuote_(data));
+  if (action === "close_commercial_cart") return jsonOutput(closeCommercialCart_(data));
   if (action === "delete_company_data") return jsonOutput(deleteCompanyData_(data));
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(data));
   if (action === "factory_reset_commercial") return jsonOutput(factoryResetCommercial_(data));
@@ -2151,6 +2300,8 @@ function doGet(e) {
     crm_tasks: true,
     crm_activities: true,
     crm_settings: true,
+    crm_aliases: true,
+    crm_quotes: true,
     catalog_health: true,
     cleanup_candidates: true,
     clear_events: true,
@@ -2166,6 +2317,8 @@ function doGet(e) {
   if (action === "crm_tasks") return jsonOutput(readCrmTasks_());
   if (action === "crm_activities") return jsonOutput(readCrmActivities_());
   if (action === "crm_settings") return jsonOutput(readCrmSettings_());
+  if (action === "crm_aliases") return jsonOutput(readCrmAliases_());
+  if (action === "crm_quotes") return jsonOutput(readCrmQuotes_());
   if (action === "catalog_health") return jsonOutput(readCatalogHealth_());
   if (action === "cleanup_candidates") return jsonOutput(previewCleanupCandidates_());
   if (action === "clear_events" || action === "reset" || action === "clear") return jsonOutput(clearEvents_(params));

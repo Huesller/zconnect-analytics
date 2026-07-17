@@ -37,6 +37,7 @@ import { StatGrid } from "./components/StatGrid.jsx";
 import { RankingTable } from "./components/RankingTable.jsx";
 import { readClientImportFile } from "./clientImport.js";
 import { classifyImportedClients } from "./clientImportCore.js";
+import { readExternalQuotePdf } from "./externalQuotePdf.js";
 
 const ANALYTICS_API_URL = "/api/analytics";
 const EMPTY_PERIOD_MESSAGE = "Nenhum evento registrado no período.";
@@ -615,6 +616,7 @@ async function fetchCrmSettings() {
   const data = await fetchAnalyticsAction("crm_settings");
   return data.settings && typeof data.settings === "object" ? data.settings : {};
 }
+async function fetchCrmQuotes() { return fetchAnalyticsAction("crm_quotes"); }
 
 async function fetchCatalogHealth() {
   const data = await fetchAnalyticsAction("catalog_health");
@@ -2577,6 +2579,8 @@ function App() {
   const [crmClients, setCrmClients] = useState([]);
   const [crmTasks, setCrmTasks] = useState([]);
   const [crmActivities, setCrmActivities] = useState([]);
+  const [crmQuotes, setCrmQuotes] = useState([]);
+  const [crmQuoteItems, setCrmQuoteItems] = useState([]);
   const [crmSettings, setCrmSettings] = useState({});
   const [catalogHealth, setCatalogHealth] = useState({ snapshots: [], products: [], latest: null });
   const [status, setStatus] = useState("Carregando eventos reais...");
@@ -2634,14 +2638,15 @@ function App() {
     if (!silent) setStatus("Carregando eventos reais...");
     setIsLoading(true);
     try {
-      const [data, activeReservations, savedCrmClients, savedTasks, savedActivities, savedSettings, savedCatalogHealth] = await Promise.all([
+      const [data, activeReservations, savedCrmClients, savedTasks, savedActivities, savedSettings, savedCatalogHealth, savedQuotes] = await Promise.all([
         fetchEvents(),
         fetchActiveReservations().catch(() => []),
         fetchCrmClients().catch(() => []),
         fetchCrmTasks().catch(() => []),
         fetchCrmActivities().catch(() => []),
         fetchCrmSettings().catch(() => ({})),
-        fetchCatalogHealth().catch(() => ({ snapshots: [], products: [], latest: null }))
+        fetchCatalogHealth().catch(() => ({ snapshots: [], products: [], latest: null })),
+        fetchCrmQuotes().catch(() => ({ quotes: [], items: [] }))
       ]);
       setEvents(data);
       setReservations(activeReservations);
@@ -2650,6 +2655,8 @@ function App() {
       setCrmActivities((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedActivities, current, ["activityId", "id"]) : savedActivities);
       setCrmSettings(savedSettings);
       setCatalogHealth(savedCatalogHealth);
+      setCrmQuotes(savedQuotes.quotes || []);
+      setCrmQuoteItems(savedQuotes.items || []);
       setLastUpdatedAt(new Date());
       const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
       setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
@@ -3297,6 +3304,9 @@ function App() {
         lastOutcome: outcome.note || (status === "won" ? "Pedido fechado" : "Oportunidade perdida"),
         lostReason: status === "lost" ? outcome.reason || "Outro" : ""
       }));
+      await postAnalyticsAction("close_commercial_cart", { companyKey: client.companyKey, companyName: client.company, outcome: status, reason: outcome.reason || "" });
+      setReservations((current) => current.filter((item) => companyKey(item.company) !== client.companyKey));
+      setCrmQuotes((current) => current.map((quote) => companyKey(quote.companyKey || quote.companyName) === client.companyKey && !["won", "lost"].includes(quote.status) ? { ...quote, status } : quote));
       showToast(status === "won" ? "Venda registrada no resultado do mês." : "Perda registrada para análise.");
     } catch (error) {
       showToast(error.message || "Não foi possível registrar o resultado.", "error");
@@ -3321,7 +3331,31 @@ function App() {
     const client = row.client || crmRows.find((item) => item.companyKey === row.companyKey);
     if (!client) { showToast("Abra o cliente e salve a ficha antes de alterar a situação.", "error"); return; }
     await moveClientStage(client, status);
+    if (["won", "lost"].includes(status)) {
+      await postAnalyticsAction("close_commercial_cart", { companyKey: client.companyKey, companyName: client.company, sessionId: row.sessionId || "", outcome: status, reason: status === "lost" ? client.lostReason || "Outro" : "" });
+      setReservations((current) => current.filter((item) => companyKey(item.company) !== client.companyKey));
+    }
     showToast(status === "won" ? "Carrinho movido para Pedido fechado." : status === "lost" ? "Carrinho movido para Perdido." : "Carrinho reaberto para acompanhamento.");
+  }
+
+  async function importExternalQuote(client, file) {
+    const quote = await readExternalQuotePdf(file);
+    const confirmed = window.confirm(`Importar/atualizar a cotação nº ${quote.externalNumber}?\n\nCliente no PDF: ${quote.companyName}\nItens identificados: ${quote.items.length}\nTotal: ${money(quote.total)}\n\nEla será vinculada a ${client.company}.`);
+    if (!confirmed) return null;
+    const result = await postAnalyticsAction("upsert_external_quote", { companyKey: client.companyKey, companyName: client.company, owner: client.owner, quote });
+    setCrmQuotes((current) => [result.quote, ...current.filter((item) => String(item.quoteId) !== String(result.quote.quoteId))]);
+    setCrmQuoteItems((current) => [...result.items.map((item, index) => ({ ...item, quoteId: result.quote.quoteId, lineNumber: index + 1 })), ...current.filter((item) => String(item.quoteId) !== String(result.quote.quoteId))]);
+    await saveClientProfile(clientProfilePayload(client, { status: "quoted", expectedValue: quote.total }));
+    showToast(result.updated ? "Cotação atualizada pela nova versão do PDF." : "Cotação importada e vinculada ao cliente.");
+    return result;
+  }
+
+  async function mergeClientIdentity(client, sourceName) {
+    const result = await postAnalyticsAction("merge_crm_clients", { sourceName, targetName: client.company, owner: client.owner });
+    showToast(`${sourceName} foi mesclado a ${client.company}. Os próximos acessos serão reconhecidos automaticamente.`);
+    setSelectedClient(null);
+    await load({ silent: true });
+    return result;
   }
 
   async function saveMonthlyTarget(value) {
@@ -3992,6 +4026,9 @@ function App() {
           reservations={reservations.filter((item) => companyKey(item.company) === selectedClient.companyKey)}
           tasks={crmTasks.map(normalizeCrmTask).filter((item) => item.companyKey === selectedClient.companyKey)}
           activities={crmActivities.map(normalizeCrmActivity).filter((item) => item.companyKey === selectedClient.companyKey)}
+          quotes={crmQuotes.filter((item) => companyKey(item.companyKey || item.companyName) === selectedClient.companyKey)}
+          quoteItems={crmQuoteItems}
+          mergeCandidates={crmRows.filter((item) => item.companyKey !== selectedClient.companyKey && (!selectedClient.owner || item.owner === selectedClient.owner))}
           onClose={() => setSelectedClient(null)}
           onSave={saveClientProfile}
           onSaveTask={saveCrmTask}
@@ -4002,6 +4039,8 @@ function App() {
           onSaveNote={saveClientNote}
           onUpdateNote={updateClientNote}
           onDeleteNote={deleteClientNote}
+          onImportQuote={importExternalQuote}
+          onMergeClient={mergeClientIdentity}
           isSaving={isSavingCrm}
         />
       ) : null}
@@ -4716,7 +4755,7 @@ function ClientImportModal({ existingClients = [], profile, onClose, onImport, i
   </section></div>;
 }
 
-function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onCancelTask, onOutcome, onDeleteClient, onSaveNote, onUpdateNote, onDeleteNote, isSaving }) {
+function ClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], quotes = [], quoteItems = [], mergeCandidates = [], onClose, onSave, onSaveTask, onCompleteTask, onCancelTask, onOutcome, onDeleteClient, onSaveNote, onUpdateNote, onDeleteNote, onImportQuote, onMergeClient, isSaving }) {
   const initialContactDate = crmContactDate(client.nextContactAt);
   const [tab, setTab] = useState(client.initialTab || "summary");
   const [form, setForm] = useState({
@@ -4732,6 +4771,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const [stageStatus, setStageStatus] = useState("");
   const [error, setError] = useState("");
   const [copiedFollowUp, setCopiedFollowUp] = useState(false);
+  const [mergeSource, setMergeSource] = useState("");
   const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
   const quoteEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "whatsapp_quote")), [events]);
   const cartEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "add_to_cart")), [events]);
@@ -4764,7 +4804,11 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     }
     const previous = form.status;
     setForm((current) => ({ ...current, status, lostReason: status === "lost" ? lostReason : "" })); setBusyAction("stage"); setStageStatus("Salvando...");
-    try { await onSave({ ...form, companyKey: client.companyKey, status, lostReason: status === "lost" ? lostReason : "" }); setStageStatus("Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800); }
+    try {
+      if (["won", "lost"].includes(status)) await onOutcome({ ...client, ...form, status, lostReason }, { type: status, value: form.expectedValue || client.quoteTotalNumber || 0, reason: lostReason, note: status === "won" ? "Pedido fechado pelo Cliente 360" : "Oportunidade encerrada pelo Cliente 360" });
+      else await onSave({ ...form, companyKey: client.companyKey, status, lostReason: "" });
+      setStageStatus(status === "won" ? "Pedido concluído" : status === "lost" ? "Oportunidade encerrada" : "Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800);
+    }
     catch (saveError) { setForm((current) => ({ ...current, status: previous })); setStageStatus("Não foi possível alterar"); setError(saveError.message || "Não foi possível alterar a etapa."); }
     finally { setBusyAction(""); }
   }
@@ -4790,6 +4834,23 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
       setError("Não foi possível copiar a mensagem de acompanhamento.");
     }
   }
+  async function handleQuoteFile(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setBusyAction("quote"); setError("");
+    try { await onImportQuote(client, file); setForm((current) => ({ ...current, status: "quoted" })); }
+    catch (quoteError) { setError(quoteError.message || "Não foi possível ler a cotação."); }
+    finally { setBusyAction(""); }
+  }
+  async function handleMerge() {
+    if (!mergeSource) return;
+    const candidate = mergeCandidates.find((item) => item.companyKey === mergeSource);
+    if (!candidate || !window.confirm(`Mesclar definitivamente “${candidate.company}” em “${client.company}”?\n\nHistórico, carrinho e próximos acessos passarão a pertencer a um único cliente.`)) return;
+    setBusyAction("merge");
+    try { await onMergeClient(client, candidate.company); }
+    catch (mergeError) { setError(mergeError.message || "Não foi possível mesclar os clientes."); setBusyAction(""); }
+  }
   async function handleNote(event) {
     event.preventDefault();
     if (!noteForm.note.trim()) return;
@@ -4813,6 +4874,9 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
       <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{client.itemCount || interestRows.length}</strong></div><div><span>Cotações</span><strong>{client.quotes}</strong></div><div><span>Valor cotado</span><strong>{client.quoteTotal}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
       <nav className="client-tabs">{tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
       <div className="client-tab-content">
+        {tab === "summary" && mergeCandidates.length ? <div className="client-merge-toolbar"><div><strong>Cliente duplicado?</strong><span>Mescle uma identificação do catálogo com este cadastro. A associação ficará permanente.</span></div><select value={mergeSource} onChange={(event) => setMergeSource(event.target.value)}><option value="">Escolher cliente para mesclar...</option>{mergeCandidates.map((item) => <option key={item.companyKey} value={item.companyKey}>{item.company}</option>)}</select><button type="button" onClick={handleMerge} disabled={!mergeSource || busyAction === "merge"}>{busyAction === "merge" ? "Mesclando..." : "Mesclar neste cliente"}</button></div> : null}
+        {tab === "cart" ? <div className="client-commerce-toolbar"><label className="quote-pdf-button"><Upload size={15}/>{busyAction === "quote" ? "Lendo PDF..." : "Importar cotação PDF"}<input type="file" accept="application/pdf,.pdf" onChange={handleQuoteFile} disabled={busyAction === "quote"}/></label><span>O mesmo número de cotação atualiza a versão existente.</span></div> : null}
+        {tab === "cart" && quotes.length ? <div className="external-quote-list">{quotes.map((quote) => <article key={quote.quoteId}><span><strong>Cotação #{quote.externalNumber}</strong><small>{quote.itemsCount || 0} item(ns) · versão {quote.version || 1} · {quote.status === "won" ? "Pedido fechado" : quote.status === "lost" ? "Perdida" : "Em andamento"}</small></span><b>{money(quote.total)}</b></article>)}</div> : null}
         {tab === "summary" ? <form className="client-form client-form-v2" onSubmit={handleSubmit}>
           <div className="client-form-grid">
             <label>Empresa<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required/></label>
