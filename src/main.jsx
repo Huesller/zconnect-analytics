@@ -4787,12 +4787,12 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const [error, setError] = useState("");
   const [copiedFollowUp, setCopiedFollowUp] = useState(false);
   const [mergeSource, setMergeSource] = useState("");
+  const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
   const externalItems = useMemo(() => quoteItems.filter((item) => quotes.some((quote) => String(quote.quoteId) === String(item.quoteId))), [quoteItems, quotes]);
   const externalQuoteTotal = useMemo(() => quotes.reduce((sum, quote) => sum + safeNumber(quote.total), 0), [quotes]);
   const visibleItemCount = Math.max(client.itemCount || interestRows.length, externalItems.reduce((sum, item) => sum + safeNumber(item.quantity || 1), 0));
   const visibleQuoteCount = Math.max(safeNumber(client.quotes), quotes.length);
   const visibleQuoteTotal = Math.max(safeNumber(client.quoteTotalNumber), externalQuoteTotal);
-  const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
   const quoteEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "whatsapp_quote")), [events]);
   const cartEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "add_to_cart")), [events]);
   const unmetDemandEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "search_no_results")), [events]);

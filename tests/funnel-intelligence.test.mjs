@@ -34,6 +34,12 @@ test("Cliente 360 protege alterações locais durante sincronização", () => {
   assert.match(main, /if \(!clientModalOpenRef\.current\) load\(\{ silent: true \}\)/);
 });
 
+test("Cliente 360 inicializa interesses antes de calcular os totais do modal", () => {
+  const modal = main.slice(main.indexOf("function ClientProfileModal"));
+  assert.ok(modal.indexOf("const interestRows = useMemo") >= 0);
+  assert.ok(modal.indexOf("const interestRows = useMemo") < modal.indexOf("const visibleItemCount"));
+});
+
 test("recência de compra não é apresentada como status do cliente", () => {
   assert.match(main, /Recência da compra/);
   assert.match(main, /Sem compra há \+120 dias/);
