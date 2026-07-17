@@ -2731,12 +2731,13 @@ function App() {
     return okConsultant && okCompany;
   }).map((item, index) => ({ ...item, position: index + 1, expires: reservationExpiryLabel(item.expiresAtRaw) })), [reservations, consultant, company, lastUpdatedAt]);
 
+  const openExternalQuotes = useMemo(() => crmQuotes.filter((quote) => !["won", "lost"].includes(String(quote.status || "open"))), [crmQuotes]);
   const reservationKpis = useMemo(() => ({
-    carts: new Set(filteredReservations.map((item) => item.sessionId)).size,
+    carts: new Set([...filteredReservations.map((item) => `session:${item.sessionId}`), ...openExternalQuotes.map((quote) => `pdf:${quote.quoteId}`)]).size,
     reserved: filteredReservations.reduce((sum, item) => sum + item.reservedNumber, 0),
     excess: filteredReservations.reduce((sum, item) => sum + item.excessNumber, 0),
-    quoted: new Set(filteredReservations.filter((item) => item.statusKey === "quoted").map((item) => item.sessionId)).size
-  }), [filteredReservations]);
+    quoted: new Set(filteredReservations.filter((item) => item.statusKey === "quoted").map((item) => item.sessionId)).size + openExternalQuotes.length
+  }), [filteredReservations, openExternalQuotes]);
 
   const activeCartRows = useMemo(() => {
     const carts = new Map();
@@ -2761,6 +2762,14 @@ function App() {
       cart.excessNumber += item.excessNumber;
       cart.quoted = cart.quoted || item.statusKey === "quoted";
     });
+    openExternalQuotes.forEach((quote) => {
+      const id = `pdf-${quote.quoteId}`;
+      carts.set(id, {
+        id, sessionId: "", companyKey: companyKey(quote.companyKey || quote.companyName), company: quote.companyName,
+        consultant: quote.owner || "-", products: safeNumber(quote.itemsCount), requestedNumber: safeNumber(quote.quantity),
+        reservedNumber: 0, excessNumber: 0, quoted: true, externalQuote: true, quoteTotal: safeNumber(quote.total)
+      });
+    });
 
     return [...carts.values()].map((cart, index) => {
       const status = cart.quoted ? "Cotação enviada" : "No carrinho";
@@ -2770,11 +2779,11 @@ function App() {
         requested: cart.requestedNumber,
         reserved: cart.reservedNumber,
         excess: cart.excessNumber || "-",
-        status,
+        status: cart.externalQuote ? `Cotação PDF · ${money(cart.quoteTotal)}` : status,
         _search: [cart.company, cart.consultant, status].join(" ").toLowerCase()
       };
     });
-  }, [filteredReservations]);
+  }, [filteredReservations, openExternalQuotes]);
 
   const byType = useMemo(() => {
     const explicitNoResults = filtered.filter((event) => event.event === "search_no_results");
@@ -2823,7 +2832,13 @@ function App() {
   const normalizedActivities = useMemo(() => crmActivities.map(normalizeCrmActivity).filter((activity) => (
     company === "all" || normalizeCompany(activity.companyName) === company
   )), [crmActivities, company]);
-  const crmRows = useMemo(() => buildCrmRows(crmEventScope, filteredReservations, crmClients), [crmEventScope, filteredReservations, crmClients]);
+  const crmRows = useMemo(() => buildCrmRows(crmEventScope, filteredReservations, crmClients).map((row) => {
+    const external = crmQuotes.filter((quote) => companyKey(quote.companyKey || quote.companyName) === row.companyKey);
+    const externalItems = external.reduce((sum, quote) => sum + safeNumber(quote.itemsCount), 0);
+    const externalTotal = external.reduce((sum, quote) => sum + safeNumber(quote.total), 0);
+    if (!external.length) return row;
+    return { ...row, itemCount: Math.max(row.itemCount || 0, externalItems), quotes: row.quotes + external.length, quoteTotalNumber: row.quoteTotalNumber + externalTotal, quoteTotal: money(row.quoteTotalNumber + externalTotal), expectedValue: row.expectedValue || external.filter((quote) => !["won", "lost"].includes(quote.status)).reduce((sum, quote) => sum + safeNumber(quote.total), 0) };
+  }), [crmEventScope, filteredReservations, crmClients, crmQuotes]);
   const cartInterestHistory = useMemo(() => buildCartInterestHistory(crmEventScope, filteredReservations, crmRows, crmClients), [crmEventScope, filteredReservations, crmRows, crmClients]);
   const opportunityRows = useMemo(() => buildOpportunityRows(crmRows, filtered), [crmRows, filtered]);
   const actionRows = useMemo(() => buildActionCenterRows(opportunityRows, normalizedTasks, crmRows), [opportunityRows, normalizedTasks, crmRows]);
@@ -4772,6 +4787,11 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const [error, setError] = useState("");
   const [copiedFollowUp, setCopiedFollowUp] = useState(false);
   const [mergeSource, setMergeSource] = useState("");
+  const externalItems = useMemo(() => quoteItems.filter((item) => quotes.some((quote) => String(quote.quoteId) === String(item.quoteId))), [quoteItems, quotes]);
+  const externalQuoteTotal = useMemo(() => quotes.reduce((sum, quote) => sum + safeNumber(quote.total), 0), [quotes]);
+  const visibleItemCount = Math.max(client.itemCount || interestRows.length, externalItems.reduce((sum, item) => sum + safeNumber(item.quantity || 1), 0));
+  const visibleQuoteCount = Math.max(safeNumber(client.quotes), quotes.length);
+  const visibleQuoteTotal = Math.max(safeNumber(client.quoteTotalNumber), externalQuoteTotal);
   const interestRows = useMemo(() => buildClientInterestRows(events, reservations), [events, reservations]);
   const quoteEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "whatsapp_quote")), [events]);
   const cartEvents = useMemo(() => sortEventsDesc(events.filter((event) => event.event === "add_to_cart")), [events]);
@@ -4851,6 +4871,17 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     try { await onMergeClient(client, candidate.company); }
     catch (mergeError) { setError(mergeError.message || "Não foi possível mesclar os clientes."); setBusyAction(""); }
   }
+  async function finishQuote(quote, type) {
+    let reason = "";
+    if (type === "lost") {
+      reason = window.prompt(`Motivo da perda:\n\n${LOST_REASONS.join(" · ")}`, "")?.trim() || "";
+      if (!reason) return;
+    }
+    if (!window.confirm(type === "won" ? `Confirmar venda de ${money(quote.total)}?\n\nA cotação sairá dos carrinhos ativos e entrará no resultado do mês.` : `Marcar a cotação #${quote.externalNumber} como perdida?`)) return;
+    setBusyAction(`finish-${quote.quoteId}`);
+    try { await onOutcome({ ...client, ...form, expectedValue: quote.total }, { type, value: quote.total, reason, note: `Cotação #${quote.externalNumber} ${type === "won" ? "convertida em venda" : "encerrada como perdida"}` }); }
+    finally { setBusyAction(""); }
+  }
   async function handleNote(event) {
     event.preventDefault();
     if (!noteForm.note.trim()) return;
@@ -4871,12 +4902,13 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
     <section className="client-modal client-modal-v2" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
       <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><div className="client-header-actions"><label>Situação no funil<select value={form.status} disabled={busyAction === "stage" || isSaving} onChange={(event) => changePipelineStage(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select><small>{stageStatus || "Alteração salva automaticamente"}</small></label><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div></header>
-      <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{client.itemCount || interestRows.length}</strong></div><div><span>Cotações</span><strong>{client.quotes}</strong></div><div><span>Valor cotado</span><strong>{client.quoteTotal}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
+      <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{visibleItemCount}</strong></div><div><span>Cotações</span><strong>{visibleQuoteCount}</strong></div><div><span>Valor cotado</span><strong>{money(visibleQuoteTotal)}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
       <nav className="client-tabs">{tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
       <div className="client-tab-content">
         {tab === "summary" && mergeCandidates.length ? <div className="client-merge-toolbar"><div><strong>Cliente duplicado?</strong><span>Mescle uma identificação do catálogo com este cadastro. A associação ficará permanente.</span></div><select value={mergeSource} onChange={(event) => setMergeSource(event.target.value)}><option value="">Escolher cliente para mesclar...</option>{mergeCandidates.map((item) => <option key={item.companyKey} value={item.companyKey}>{item.company}</option>)}</select><button type="button" onClick={handleMerge} disabled={!mergeSource || busyAction === "merge"}>{busyAction === "merge" ? "Mesclando..." : "Mesclar neste cliente"}</button></div> : null}
         {tab === "cart" ? <div className="client-commerce-toolbar"><label className="quote-pdf-button"><Upload size={15}/>{busyAction === "quote" ? "Lendo PDF..." : "Importar cotação PDF"}<input type="file" accept="application/pdf,.pdf" onChange={handleQuoteFile} disabled={busyAction === "quote"}/></label><span>O mesmo número de cotação atualiza a versão existente.</span></div> : null}
-        {tab === "cart" && quotes.length ? <div className="external-quote-list">{quotes.map((quote) => <article key={quote.quoteId}><span><strong>Cotação #{quote.externalNumber}</strong><small>{quote.itemsCount || 0} item(ns) · versão {quote.version || 1} · {quote.status === "won" ? "Pedido fechado" : quote.status === "lost" ? "Perdida" : "Em andamento"}</small></span><b>{money(quote.total)}</b></article>)}</div> : null}
+        {tab === "cart" && (reservations.length || quoteEvents.length) ? <div className="catalog-quote-result"><div><strong>Resultado do carrinho do catálogo</strong><span>Confirme o resultado real para retirar a reserva dos ativos e contabilizar a venda ou a perda.</span></div><button type="button" className="success" onClick={() => finishQuote({ quoteId: "catalog", externalNumber: "Catálogo", total: client.quoteTotalNumber || followUpContext.estimatedTotal || 0 }, "won")}><CheckCircle2 size={15}/> Venda concluída</button><button type="button" className="danger" onClick={() => finishQuote({ quoteId: "catalog", externalNumber: "Catálogo", total: client.quoteTotalNumber || followUpContext.estimatedTotal || 0 }, "lost")}><XCircle size={15}/> Venda perdida</button></div> : null}
+        {tab === "cart" && quotes.length ? <div className="external-quote-list">{quotes.map((quote) => { const items = quoteItems.filter((item) => String(item.quoteId) === String(quote.quoteId)); const closed = ["won", "lost"].includes(quote.status); return <details key={quote.quoteId} className={`external-quote-card status-${quote.status || "open"}`} open={!closed}><summary><span><strong>Cotação #{quote.externalNumber}</strong><small>{quote.itemsCount || items.length} item(ns) · versão {quote.version || 1} · {quote.status === "won" ? "Venda concluída" : quote.status === "lost" ? "Venda perdida" : "Em andamento"}</small></span><b>{money(quote.total)}</b><ChevronDown size={16}/></summary><div className="external-quote-body"><div className="external-quote-items">{items.map((item) => <div key={`${quote.quoteId}-${item.lineNumber}-${item.productCode}`}><span><b>{item.productCode || "-"}</b><small>{item.description || "Produto sem descrição"}</small></span><strong>{safeNumber(item.quantity)} un.</strong><span>{money(item.unitPrice)}</span><b>{money(item.total)}</b></div>)}{!items.length ? <EmptyState message="O PDF informou o valor, mas nenhum item pôde ser reconhecido."/> : null}</div>{!closed ? <div className="external-quote-actions"><button type="button" className="success" onClick={() => finishQuote(quote, "won")} disabled={busyAction === `finish-${quote.quoteId}`}><CheckCircle2 size={15}/> Confirmar venda</button><button type="button" className="danger" onClick={() => finishQuote(quote, "lost")} disabled={busyAction === `finish-${quote.quoteId}`}><XCircle size={15}/> Marcar perdida</button></div> : <p className="external-quote-closed">{quote.status === "won" ? "Venda contabilizada no resultado comercial." : `Perda registrada${quote.lostReason ? `: ${quote.lostReason}` : "."}`}</p>}</div></details>; })}</div> : null}
         {tab === "summary" ? <form className="client-form client-form-v2" onSubmit={handleSubmit}>
           <div className="client-form-grid">
             <label>Empresa<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required/></label>
