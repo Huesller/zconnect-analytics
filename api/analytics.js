@@ -84,6 +84,11 @@ async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, s
     const activity = (data.activities || []).find((item) => String(item.activityId || item.id) === String(body.activityId || ""));
     return Boolean(activity && allowed.has(rowConsultant(activity)));
   }
+  if (action === "update_crm_demand_status") {
+    const data = await readUpstream(apiUrl, adminToken, "crm_demands", signal);
+    const demand = (data.demands || []).find((item) => String(item.demandId || item.id) === String(body.demandId || ""));
+    return Boolean(demand && allowed.has(rowConsultant(demand)));
+  }
   if (action === "merge_crm_clients") {
     const [eventsData, clientsData] = await Promise.all([readUpstream(apiUrl, adminToken, "events", signal), readUpstream(apiUrl, adminToken, "crm_clients", signal)]);
     const owns = (name) => {
@@ -93,7 +98,7 @@ async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, s
     };
     return owns(body.sourceName) && owns(body.targetName);
   }
-  if (!["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client", "upsert_external_quote", "close_commercial_cart"].includes(action)) return true;
+  if (!["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client", "upsert_external_quote", "close_commercial_cart", "upsert_crm_demand"].includes(action)) return true;
   const requestedCompany = normalizeCompanyKey(body.companyKey || body.companyName);
   if (!requestedCompany) return false;
   const [eventsData, clientsData] = await Promise.all([
@@ -121,6 +126,7 @@ function scopePayload(action, data, profile) {
   if (action === "crm_clients" && Array.isArray(data.clients)) return { ...data, clients: data.clients.filter(keep) };
   if (action === "crm_tasks" && Array.isArray(data.tasks)) return { ...data, tasks: data.tasks.filter(keep) };
   if (action === "crm_activities" && Array.isArray(data.activities)) return { ...data, activities: data.activities.filter(keep) };
+  if (action === "crm_demands" && Array.isArray(data.demands)) return { ...data, demands: data.demands.filter(keep) };
   if (action === "crm_aliases" && Array.isArray(data.aliases)) return { ...data, aliases: data.aliases.filter(keep) };
   if (action === "crm_quotes" && Array.isArray(data.quotes)) {
     const quotes = data.quotes.filter(keep);
@@ -178,7 +184,7 @@ export default async function handler(req, res) {
         const canWrite = await canWriteScopedRecord(apiUrl, adminToken, action, body, profile, controller.signal);
         if (!canWrite) { clearTimeout(timeout); return json(res, 403, { ok: false, error: "client_outside_user_scope" }); }
         const primaryConsultant = [...allowedConsultants(profile)][0] || profile.username;
-        if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client", "merge_crm_clients", "upsert_external_quote", "close_commercial_cart"].includes(action)) {
+        if (["upsert_crm_client", "upsert_crm_task", "record_crm_activity", "complete_crm_action", "archive_crm_client", "merge_crm_clients", "upsert_external_quote", "close_commercial_cart", "upsert_crm_demand"].includes(action)) {
           body.owner = primaryConsultant;
           body.consultant = primaryConsultant;
         }
