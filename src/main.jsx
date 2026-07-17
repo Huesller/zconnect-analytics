@@ -78,6 +78,8 @@ const PIPELINE_STAGES = [
 ];
 
 const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desistiu", "Comprou de outro fornecedor", "Outro"];
+const CLIENT_TAGS = ["Venda sob encomenda", "Cliente potencial", "Cliente bloqueado", "Linha mecânica", "Compra recorrente", "Cliente em reativação"];
+const FUNNEL_EXIT_REASONS = ["Linha mecânica — não atendemos", "Cliente bloqueado", "Fora da região atendida", "Segmento não atendido", "Cliente sem interesse", "Outro motivo"];
 const CONTACT_ACTIVITY_TYPES = ["whatsapp_sent", "contact_return", "not_answered", "call_completed", "quote_sent", "missing_stock", "high_price", "no_return", "negotiation_note", "sale_completed_note"];
 const CONTACT_ACTIVITY_OPTIONS = [
   ["whatsapp_sent", "WhatsApp enviado"], ["contact_return", "Retorno de contato"],
@@ -309,9 +311,18 @@ function crmStatusLabel(status) {
     won: "Pedido fechado",
     active: "Cliente ativo",
     cold: "Frio",
-    lost: "Perdido"
+    lost: "Perdido",
+    out_of_funnel: "Fora do funil"
   };
   return labels[status] || labels.new;
+}
+
+function parseClientTags(value) {
+  return [...new Set(String(value || "").split(/[,;|]/).map((item) => item.trim()).filter(Boolean))];
+}
+
+function serializeClientTags(tags = []) {
+  return [...new Set(tags.map((item) => String(item || "").trim()).filter(Boolean))].join(", ");
 }
 
 function percent(value) {
@@ -597,6 +608,8 @@ async function fetchCrmClients() {
     daysWithoutPurchase: safeNumber(client.daysWithoutPurchase),
     nextContactAt: String(client.nextContactAt || ""),
     tags: String(client.tags || ""),
+    funnelExitReason: String(client.funnelExitReason || ""),
+    funnelExitAt: String(client.funnelExitAt || ""),
     notes: String(client.notes || ""),
     expectedValue: safeNumber(client.expectedValue),
     lastOutcome: String(client.lastOutcome || ""),
@@ -1776,6 +1789,8 @@ function buildCrmRows(events, reservations, crmClients) {
       expectedValue: safeNumber(meta.expectedValue),
       lastOutcome: String(meta.lastOutcome || ""),
       lostReason: String(meta.lostReason || ""),
+      funnelExitReason: String(meta.funnelExitReason || ""),
+      funnelExitAt: String(meta.funnelExitAt || ""),
       actionDoneAt: String(meta.actionDoneAt || ""),
       archivedAt: String(meta.archivedAt || ""),
       activeCartQty: cart.reserved,
@@ -1787,7 +1802,7 @@ function buildCrmRows(events, reservations, crmClients) {
       quoteRate: percent(row.productOpen ? row.quotes / row.productOpen : 0),
       quoteTotal: money(row.quoteTotalNumber),
       lastEvent: row.lastEventRaw ? dateTime(row.lastEventRaw) : "-",
-      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.customerCode, meta.taxId, meta.contactName, meta.phone, meta.email, meta.city, meta.state, meta.address, meta.route, meta.segment, meta.tags, ...topProducts].join(" ").toLowerCase()
+      _search: [row.company, row.consultant, crmStatusLabel(statusKey), meta.customerCode, meta.taxId, meta.contactName, meta.phone, meta.email, meta.city, meta.state, meta.address, meta.route, meta.segment, meta.tags, meta.funnelExitReason, ...topProducts].join(" ").toLowerCase()
     };
   }).sort((a, b) => b.score - a.score || new Date(b.lastEventRaw) - new Date(a.lastEventRaw));
 }
@@ -2053,6 +2068,8 @@ function clientProfilePayload(client = {}, overrides = {}) {
     expectedValue: safeNumber(client.expectedValue),
     lastOutcome: client.lastOutcome || "",
     lostReason: client.lostReason || "",
+    funnelExitReason: client.funnelExitReason || "",
+    funnelExitAt: client.funnelExitAt || "",
     ...overrides
   };
 }
@@ -3165,7 +3182,9 @@ function App() {
         notes: normalized.notes,
         expectedValue: safeNumber(normalized.expectedValue),
         lastOutcome: normalized.lastOutcome,
-        lostReason: normalized.lostReason
+        lostReason: normalized.lostReason,
+        funnelExitReason: normalized.funnelExitReason || "",
+        funnelExitAt: normalized.funnelExitAt || ""
       } : current);
       showToast("Ficha CRM salva com sucesso.");
       return normalized;
@@ -3211,6 +3230,8 @@ function App() {
       expectedValue: safeNumber(normalized.expectedValue),
       lastOutcome: normalized.lastOutcome || "",
       lostReason: normalized.lostReason || "",
+      funnelExitReason: normalized.funnelExitReason || "",
+      funnelExitAt: normalized.funnelExitAt || "",
       score: 0, totalActions: 0, itemCount: 0, quotes: 0, quoteTotalNumber: 0, quoteTotal: money(0), activeCartQty: 0,
       topProducts: [], activeCartProducts: [], lastEvent: "Cliente cadastrado manualmente", lastEventRaw: ""
     });
@@ -3725,12 +3746,15 @@ function App() {
   }
 
   const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");
+  const funnelRows = crmRows.filter((item) => item.statusKey !== "out_of_funnel");
+  const outOfFunnelRows = crmRows.filter((item) => item.statusKey === "out_of_funnel");
   const navigation = [
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
     { id: "opportunities", label: "Ações agora", icon: <AlertTriangle size={17}/>, badge: actionRows.filter((item) => item.priority >= 80).length },
-    { id: "pipeline", label: "Funil", icon: <Filter size={17}/>, badge: crmRows.filter((item) => !["won", "lost"].includes(item.statusKey)).length },
+    { id: "pipeline", label: "Funil", icon: <Filter size={17}/>, badge: funnelRows.filter((item) => !["won", "lost"].includes(item.statusKey)).length },
     { id: "crm", label: "Clientes CRM", icon: <Building2 size={17}/>, badge: crmRows.length },
     { id: "notes", label: "Anotações", icon: <MessageSquare size={17}/>, badge: normalizedActivities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type)).length },
+    { id: "reports", label: "Relatórios", icon: <TrendingUp size={17}/> },
     { id: "products", label: "Produtos", icon: <Flame size={17}/> },
     { id: "catalog", label: "Catálogo e estoque", icon: <Eye size={17}/>, badge: alerts.filter((item) => item.view === "catalog").length },
     { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
@@ -3745,6 +3769,7 @@ function App() {
     pipeline: "Arraste os clientes entre as etapas e acompanhe o avanço comercial.",
     crm: "Histórico, responsável, etapa e próximo contato de cada cliente real.",
     notes: "Conversas, próximos passos e pendências organizados por cliente.",
+    reports: "Ocorrências, recorrências, clientes e motivos comerciais consolidados.",
     products: "Demanda real, intenção de compra e lacunas do catálogo.",
     catalog: "Saúde da atualização diária, estoque disponível e demanda por reposição.",
     carts: "Carrinhos atuais, interesses expirados e acompanhamento comercial em um só lugar.",
@@ -3756,6 +3781,7 @@ function App() {
   const dueFollowUps = dueTaskRows.length;
   const negotiationClients = crmRows.filter((item) => item.statusKey === "negotiation").length;
   const filteredActionRows = actionRows.filter((item) => {
+    if (item.statusKey === "out_of_funnel") return false;
     if (actionFilter === "immediate") return item.priority >= 100;
     if (actionFilter === "cart") return item.actionType === "opportunity" && (item.priority === 90 || item.activeCartQty > 0);
     if (actionFilter === "demand") return item.priority === 70;
@@ -3881,7 +3907,7 @@ function App() {
             <AlertCenter alerts={alerts} onNavigate={setActiveView}/>
             <GoalPanel target={monthlyTarget} result={wonValue} won={wonActivities.length} lost={lostActivities.length} onSave={isAdminUser ? saveMonthlyTarget : null}/>
           </section>
-          <OpportunityList rows={actionRows.slice(0, 8)} onOpen={openActionClient} onEdit={openClientProfile} onFinish={(row) => row.actionType === "task" ? completeCrmTask(row.taskId) : completeCrmAction(row)} onDelete={(row) => row.actionType === "task" ? cancelCrmTask(row.taskId) : archiveClient(row)}/>
+          <OpportunityList rows={actionRows.filter((item) => item.statusKey !== "out_of_funnel").slice(0, 8)} onOpen={openActionClient} onEdit={openClientProfile} onFinish={(row) => row.actionType === "task" ? completeCrmTask(row.taskId) : completeCrmAction(row)} onDelete={(row) => row.actionType === "task" ? cancelCrmTask(row.taskId) : archiveClient(row)}/>
           <section className="overview-grid">
             <article className="panel decision-panel">
               <div className="panel-head"><h2><TrendingUp size={18}/> Caminho até a cotação</h2><span>{quoteConversionRate} de conversão</span></div>
@@ -3917,13 +3943,13 @@ function App() {
       {activeView === "pipeline" ? (
         <div className="view-stack">
           <StatGrid items={[
-            { icon: <Building2/>, label: "Clientes no funil", value: crmRows.length },
-            { icon: <Send/>, label: "Cotação enviada", value: crmRows.filter((item) => item.statusKey === "quoted").length },
-            { icon: <TrendingUp/>, label: "Em negociação", value: crmRows.filter((item) => item.statusKey === "negotiation").length, emphasis: true },
-            { icon: <UserCheck/>, label: "Pedidos fechados", value: crmRows.filter((item) => item.statusKey === "won").length, emphasis: true }
+            { icon: <Building2/>, label: "Clientes no funil", value: funnelRows.length },
+            { icon: <Send/>, label: "Cotação enviada", value: funnelRows.filter((item) => item.statusKey === "quoted").length },
+            { icon: <TrendingUp/>, label: "Em negociação", value: funnelRows.filter((item) => item.statusKey === "negotiation").length, emphasis: true },
+            { icon: <UserCheck/>, label: "Fora do funil", value: outOfFunnelRows.length }
           ]}/>
           <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Cadastrar cliente</button><span>O cliente será incluído diretamente na etapa escolhida.</span></div>
-          <PipelineBoard rows={crmRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} onOpen={openClientProfile} onMove={moveClientStage}/>
+          <PipelineBoard rows={funnelRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} onOpen={openClientProfile} onMove={moveClientStage}/>
         </div>
       ) : null}
 
@@ -3941,6 +3967,8 @@ function App() {
       ) : null}
 
       {activeView === "notes" ? <CrmNotesCenter activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile} onUpdate={updateClientNote}/> : null}
+
+      {activeView === "reports" ? <CommercialReports activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile}/> : null}
 
       {activeView === "products" ? (
         <div className="view-stack">
@@ -4567,16 +4595,57 @@ function CrmNotesCenter({ activities = [], clients = [], onOpen, onUpdate }) {
   return <div className="view-stack"><StatGrid items={[{ icon: <MessageSquare/>, label: "Anotações", value: notes.length }, { icon: <Building2/>, label: "Clientes anotados", value: new Set(notes.map((item) => item.activity.companyKey)).size }, { icon: <CalendarDays/>, label: "Ações pendentes", value: pendingCount, emphasis: true }, { icon: <UserCheck/>, label: "Ações concluídas", value: notes.filter(({ activity }) => activity.actionStatus === "done").length }]}/><article className="panel notes-center"><div className="panel-head"><div><h2><MessageSquare size={18}/> Central de anotações</h2><p>Uma linha por conversa, sempre ligada à ficha original do cliente.</p></div><button type="button" className="crm-secondary-action" onClick={exportNotes}><Download size={16}/> Exportar Excel</button></div><div className="table-tools"><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, anotação, ação ou responsável"/></label><label><Filter size={14}/> Situação<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">Todas</option><option value="pending">Ações pendentes</option><option value="done">Ações concluídas</option><option value="without_action">Sem próxima ação</option></select></label></div><div className="notes-center-list">{visible.map(({ activity, client }) => <article key={activity.activityId}><button type="button" className="note-client" onClick={() => onOpen({ ...client, initialTab: "notes" })}><strong>{client.company || activity.companyName}</strong><small>{client.customerCode ? `Código ${client.customerCode} · ` : ""}{activity.owner || client.owner || "Sem responsável"}</small></button><div><span className="note-kind">{noteTypeLabel(activity.type)}</span><p>{activity.note}</p>{activity.nextAction ? <small><CalendarDays size={13}/> {activity.nextAction} · {activity.nextActionAt ? dateOnly(activity.nextActionAt) : "sem data"}</small> : null}</div><time>{activity.createdAtLabel}</time>{activity.nextAction ? <button type="button" className={`note-status-button ${activity.actionStatus === "done" ? "done" : ""}`} onClick={() => onUpdate(activity.activityId, { type: activity.type, note: activity.note, nextAction: activity.nextAction, nextActionAt: activity.nextActionAt, actionStatus: activity.actionStatus === "done" ? "pending" : "done" })}>{activity.actionStatus === "done" ? "Concluída" : "Concluir"}</button> : <span/>}</article>)}{!visible.length ? <EmptyState message="Nenhuma anotação corresponde aos filtros atuais."/> : null}</div></article></div>;
 }
 
+function CommercialReports({ activities = [], clients = [], onOpen }) {
+  const [period, setPeriod] = useState("30");
+  const [type, setType] = useState("all");
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState("occurrences");
+  const clientMap = useMemo(() => new Map(clients.map((client) => [client.companyKey, client])), [clients]);
+  const rows = useMemo(() => activities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type) && !item.deletedAt).filter((item) => {
+    if (type !== "all" && item.type !== type) return false;
+    if (period !== "all") { const date = new Date(item.createdAtRaw); if (Number.isNaN(date.getTime()) || Date.now() - date.getTime() > Number(period) * 86400000) return false; }
+    const client = clientMap.get(item.companyKey);
+    const needle = query.trim().toLowerCase();
+    return !needle || [client?.company, client?.customerCode, client?.owner, client?.tags, item.note, noteTypeLabel(item.type)].join(" ").toLowerCase().includes(needle);
+  }), [activities, clientMap, period, type, query]);
+  const recurrence = useMemo(() => CONTACT_ACTIVITY_OPTIONS.map(([key, label]) => { const matches = rows.filter((item) => item.type === key); return { key, label, total: matches.length, clients: new Set(matches.map((item) => item.companyKey)).size, lastAt: matches.sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw))[0]?.createdAtRaw || "" }; }).filter((item) => item.total).sort((a, b) => b.total - a.total), [rows]);
+  const byClient = useMemo(() => {
+    const map = new Map();
+    rows.forEach((activity) => { const client = clientMap.get(activity.companyKey) || { companyKey: activity.companyKey, company: activity.companyName }; const current = map.get(activity.companyKey) || { client, total: 0, types: new Map(), lastAt: "", lastNote: "" }; current.total += 1; current.types.set(activity.type, (current.types.get(activity.type) || 0) + 1); if (!current.lastAt || new Date(activity.createdAtRaw) > new Date(current.lastAt)) { current.lastAt = activity.createdAtRaw; current.lastNote = activity.note; } map.set(activity.companyKey, current); });
+    return [...map.values()].map((item) => { const top = [...item.types.entries()].sort((a, b) => b[1] - a[1])[0]; return { ...item, topType: top ? noteTypeLabel(top[0]) : "-", topCount: top?.[1] || 0 }; }).sort((a, b) => b.total - a.total);
+  }, [rows, clientMap]);
+  function exportReport() {
+    const detail = rows.map((item) => { const client = clientMap.get(item.companyKey) || {}; return { client: client.company || item.companyName, code: client.customerCode || "", owner: item.owner || client.owner || "", tags: client.tags || "", occurrence: noteTypeLabel(item.type), note: item.note || "", date: item.createdAtLabel }; });
+    const detailColumns = [{key:"client",label:"Cliente"},{key:"code",label:"Código"},{key:"owner",label:"Responsável"},{key:"tags",label:"Tags"},{key:"occurrence",label:"Ocorrência"},{key:"note",label:"Anotação"},{key:"date",label:"Data"}];
+    const recurrenceColumns = [{key:"label",label:"Ocorrência"},{key:"total",label:"Registros"},{key:"clients",label:"Clientes"},{key:"last",label:"Última ocorrência"}];
+    const recurrenceRows = recurrence.map((item) => ({ ...item, last: item.lastAt ? dateTime(item.lastAt) : "" }));
+    downloadBlob(buildExcelWorkbook([{ name:"Ocorrências", rows:tableRows("Relatório comercial", detailColumns, detail), autoFilterRow:3, freezeRows:3, columnWidths:[34,14,20,34,24,60,20] }, { name:"Recorrências", rows:tableRows("Recorrências comerciais", recurrenceColumns, recurrenceRows), autoFilterRow:3, freezeRows:3, columnWidths:[28,14,14,22] }]), `zconnect-relatorio-comercial-${fileDateStamp()}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  }
+  return <div className="view-stack commercial-reports"><StatGrid items={[{icon:<MessageSquare/>,label:"Ocorrências",value:rows.length},{icon:<Building2/>,label:"Clientes envolvidos",value:byClient.length},{icon:<AlertTriangle/>,label:"Mais recorrente",value:recurrence[0]?.label || "-",emphasis:true},{icon:<UserCheck/>,label:"Vendas registradas",value:rows.filter((item) => item.type === "sale_completed_note").length}]}/><article className="panel"><div className="panel-head"><div><h2><TrendingUp size={18}/> Relatório comercial</h2><p>Entenda os motivos que mais se repetem e em quais clientes.</p></div><button type="button" className="crm-secondary-action" onClick={exportReport}><Download size={16}/> Exportar Excel</button></div><div className="table-tools"><label><CalendarDays size={14}/> Período<select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="all">Todo o histórico</option></select></label><label><Filter size={14}/> Ocorrência<select value={type} onChange={(event) => setType(event.target.value)}><option value="all">Todas</option>{CONTACT_ACTIVITY_OPTIONS.map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, responsável, tag ou anotação"/></label></div><nav className="report-tabs"><button type="button" className={tab === "occurrences" ? "active" : ""} onClick={() => setTab("occurrences")}>Recorrências</button><button type="button" className={tab === "clients" ? "active" : ""} onClick={() => setTab("clients")}>Por cliente</button></nav>{tab === "occurrences" ? <div className="report-table"><div className="report-table-head"><span>Ocorrência</span><span>Registros</span><span>Clientes</span><span>Última ocorrência</span></div>{recurrence.map((item) => <div key={item.key}><strong>{item.label}</strong><b>{item.total}</b><span>{item.clients}</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></div>)}{!recurrence.length ? <EmptyState message="Nenhuma ocorrência no período."/> : null}</div> : <div className="report-table clients"><div className="report-table-head"><span>Cliente</span><span>Registros</span><span>Mais recorrente</span><span>Última ocorrência</span></div>{byClient.map((item) => <button type="button" key={item.client.companyKey} onClick={() => onOpen(item.client)}><strong>{item.client.company}</strong><b>{item.total}</b><span>{item.topType} ({item.topCount})</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></button>)}{!byClient.length ? <EmptyState message="Nenhum cliente no período."/> : null}</div>}</article></div>;
+}
+
+function ClientTagSelector({ value = "", onChange }) {
+  const selected = parseClientTags(value);
+  const legacy = selected.filter((tag) => !CLIENT_TAGS.includes(tag));
+  function toggle(tag) {
+    onChange(serializeClientTags(selected.includes(tag) ? selected.filter((item) => item !== tag) : [...selected, tag]));
+  }
+  return <div className="fixed-tag-selector">{CLIENT_TAGS.map((tag) => <label key={tag} className={selected.includes(tag) ? "selected" : ""}><input type="checkbox" checked={selected.includes(tag)} onChange={() => toggle(tag)}/><span>{tag}</span></label>)}{legacy.map((tag) => <button type="button" key={tag} className="legacy-tag" onClick={() => toggle(tag)} title="Remover tag antiga">{tag} ×</button>)}</div>;
+}
+
 function ClientCrmTable({ rows = [], activities = [], onOpen }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [health, setHealth] = useState("all");
   const [notesOnly, setNotesOnly] = useState(false);
+  const [tag, setTag] = useState("all");
+  const [funnel, setFunnel] = useState("all");
   const [sort, setSort] = useState("company");
   const noteKeys = useMemo(() => new Set(activities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type)).map((item) => item.companyKey)), [activities]);
   const visibleRows = rows.filter((row) => {
     const needle = query.trim().toLowerCase();
-    return (status === "all" || row.statusKey === status) && (health === "all" || commercialHealth(row).key === health) && (!notesOnly || noteKeys.has(row.companyKey)) && (!needle || row._search.includes(needle));
+    const rowTags = parseClientTags(row.tags);
+    return (status === "all" || row.statusKey === status) && (health === "all" || commercialHealth(row).key === health) && (tag === "all" || rowTags.includes(tag)) && (funnel === "all" || (funnel === "out" ? row.statusKey === "out_of_funnel" : row.statusKey !== "out_of_funnel")) && (!notesOnly || noteKeys.has(row.companyKey)) && (!needle || row._search.includes(needle));
   }).sort((a, b) => sort === "recent" ? new Date(b.lastPurchaseAt || 0) - new Date(a.lastPurchaseAt || 0) : sort === "days_desc" ? purchaseDays(b) - purchaseDays(a) : sort === "total_desc" ? b.purchaseTotal - a.purchaseTotal : a.company.localeCompare(b.company, "pt-BR"));
 
   return (
@@ -4593,6 +4662,8 @@ function ClientCrmTable({ rows = [], activities = [], onOpen }) {
           </select>
         </label>
         <label><Filter size={14}/> Recência da compra<select value={health} onChange={(event) => setHealth(event.target.value)}><option value="all">Todas</option><option value="active">Comprou recentemente</option><option value="attention">31–60 dias</option><option value="risk">61–120 dias</option><option value="inactive">Mais de 120 dias</option><option value="no_history">Sem histórico de compra</option></select></label>
+        <label><Filter size={14}/> Tag<select value={tag} onChange={(event) => setTag(event.target.value)}><option value="all">Todas as tags</option>{CLIENT_TAGS.map((item) => <option key={item}>{item}</option>)}</select></label>
+        <label><Filter size={14}/> Funil<select value={funnel} onChange={(event) => setFunnel(event.target.value)}><option value="all">Todos</option><option value="in">No funil</option><option value="out">Fora do funil</option></select></label>
         <label><TrendingUp size={14}/> Ordenar<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="company">Nome</option><option value="recent">Compra mais recente</option><option value="days_desc">Mais dias sem comprar</option><option value="total_desc">Maior total comprado</option></select></label>
         <label className="check-tool"><input type="checkbox" checked={notesOnly} onChange={(event) => setNotesOnly(event.target.checked)}/> Com anotações</label>
       </div>
@@ -4603,7 +4674,7 @@ function ClientCrmTable({ rows = [], activities = [], onOpen }) {
             {visibleRows.map((row) => (
               <tr key={row.id} tabIndex="0" onClick={() => onOpen(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(row); }}>
                 <td><strong>{row.company}</strong><small>{row.customerCode ? `Código ${row.customerCode} · ` : ""}{row.contactName || row.lastEvent}</small></td>
-                <td><span className={`crm-status status-${row.statusKey}`}>{row.status}</span></td>
+                <td><span className={`crm-status status-${row.statusKey}`}>{row.status}</span>{row.funnelExitReason ? <small>{row.funnelExitReason}</small> : null}</td>
                 <td>{row.owner || "-"}</td><td>{row.lastPurchaseAt ? dateOnly(row.lastPurchaseAt) : "-"}</td><td>{purchaseDays(row) || "-"}</td><td><span className={`commercial-health health-${commercialHealth(row).key}`}>{commercialHealth(row).label}</span></td><td>{row.purchaseTotal ? money(row.purchaseTotal) : "-"}</td><td>{row.nextContact}</td>
               </tr>
             ))}
@@ -4779,7 +4850,7 @@ function NewClientModal({ owner, onClose, onSave, isSaving }) {
       <label>Responsável<input value={form.owner} onChange={(event) => update("owner", event.target.value)} required/></label>
       <label>Próximo contato<DatePickerField value={form.nextContactAt} onChange={(value) => update("nextContactAt", value)}/></label>
       <label>Valor esperado<CurrencyInput value={form.expectedValue} onChange={(value) => update("expectedValue", value)}/></label>
-      <label>Tags<input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="prioridade, atacado"/></label>
+      <label className="wide-field">Tags fixas<ClientTagSelector value={form.tags} onChange={(value) => update("tags", value)}/></label>
       <label className="notes-label">Resumo inicial<textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Contexto inicial deste cliente."/></label>
     </div>{error ? <p className="form-error">{error}</p> : null}<div className="client-form-actions"><button className="crm-save" disabled={isSaving}><UserPlus size={16}/> {isSaving ? "Cadastrando..." : "Cadastrar cliente"}</button><button type="button" className="secondary-button" onClick={onClose}>Cancelar</button></div></form>
   </section></div>;
@@ -4837,7 +4908,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
   const [form, setForm] = useState({
     companyName: client.company, customerCode: client.customerCode || "", taxId: client.taxId || "", contactName: client.contactName || "", phone: client.phone || "", email: client.email || "", city: client.city || "", state: client.state || "", address: client.address || "", route: client.route || "", daysWithoutPurchase: purchaseDays(client) || "", lastPurchaseAt: client.lastPurchaseAt || "", lastPurchaseValue: client.lastPurchaseValue || "", purchaseTotal: client.purchaseTotal || "", purchaseCount: client.purchaseCount || "", averagePurchaseIntervalDays: client.averagePurchaseIntervalDays || "", segment: client.segment || "", status: client.statusKey || "new", owner: client.owner || "",
     nextContactAt: initialContactDate ? localDateInput(initialContactDate) : "", tags: client.tags || "", notes: client.notes || "",
-    expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || ""
+    expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || "", funnelExitReason: client.funnelExitReason || "", funnelExitAt: client.funnelExitAt || ""
   });
   const [taskForm, setTaskForm] = useState({ preset: "Ligar", title: "Ligar", dueAt: localDateInput(new Date()), priority: "normal" });
   const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
@@ -4887,19 +4958,33 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
       lostReason = window.prompt(`Informe o motivo da perda:\n\n${LOST_REASONS.join(" · ")}`, "")?.trim() || "";
       if (!lostReason) { setError("Informe o motivo antes de mover para Perdido."); return; }
     }
+    let funnelExitReason = form.funnelExitReason || "";
+    if (status === "out_of_funnel" && !funnelExitReason) {
+      funnelExitReason = window.prompt(`Motivo para retirar do funil:\n\n${FUNNEL_EXIT_REASONS.join(" · ")}`, "")?.trim() || "";
+      if (!funnelExitReason) { setError("Informe o motivo para retirar o cliente do funil."); return; }
+    }
     const previous = form.status;
-    setForm((current) => ({ ...current, status, lostReason: status === "lost" ? lostReason : "" })); setBusyAction("stage"); setStageStatus("Salvando...");
+    setForm((current) => ({ ...current, status, lostReason: status === "lost" ? lostReason : "", funnelExitReason: status === "out_of_funnel" ? funnelExitReason : "", funnelExitAt: status === "out_of_funnel" ? new Date().toISOString() : "" })); setBusyAction("stage"); setStageStatus("Salvando...");
     try {
       if (["won", "lost"].includes(status)) await onOutcome({ ...client, ...form, status, lostReason }, { type: status, value: form.expectedValue || client.quoteTotalNumber || 0, reason: lostReason, note: status === "won" ? "Pedido fechado pelo Cliente 360" : "Oportunidade encerrada pelo Cliente 360" });
-      else await onSave({ ...form, companyKey: client.companyKey, status, lostReason: "" });
-      setStageStatus(status === "won" ? "Pedido concluído" : status === "lost" ? "Oportunidade encerrada" : "Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800);
+      else await onSave({ ...form, companyKey: client.companyKey, status, lostReason: "", funnelExitReason: status === "out_of_funnel" ? funnelExitReason : "", funnelExitAt: status === "out_of_funnel" ? new Date().toISOString() : "" });
+      if (status === "out_of_funnel" && openTasks.length && window.confirm(`Este cliente possui ${openTasks.length} tarefa(s) aberta(s). Deseja cancelar essas tarefas?`)) await Promise.all(openTasks.map((task) => onCancelTask(task.taskId)));
+      setStageStatus(status === "won" ? "Pedido concluído" : status === "lost" ? "Oportunidade encerrada" : status === "out_of_funnel" ? "Retirado do funil" : "Etapa atualizada"); window.setTimeout(() => setStageStatus(""), 1800);
     }
     catch (saveError) { setForm((current) => ({ ...current, status: previous })); setStageStatus("Não foi possível alterar"); setError(saveError.message || "Não foi possível alterar a etapa."); }
     finally { setBusyAction(""); }
   }
   async function handleSubmit(event) {
     event.preventDefault(); setError("");
-    try { await onSave({ ...form, companyKey: client.companyKey }); } catch (saveError) { setError(saveError.message || "Não foi possível salvar."); }
+    try {
+      const tags = parseClientTags(form.tags);
+      const shouldOfferExit = form.status !== "out_of_funnel" && (tags.includes("Cliente bloqueado") || tags.includes("Linha mecânica"));
+      if (shouldOfferExit && window.confirm("Esta tag normalmente indica que o cliente não deve permanecer no funil ativo. Deseja retirar este cliente do funil agora?")) {
+        const reason = tags.includes("Cliente bloqueado") ? "Cliente bloqueado" : "Linha mecânica — não atendemos";
+        await onSave({ ...form, companyKey: client.companyKey, status: "out_of_funnel", funnelExitReason: reason, funnelExitAt: new Date().toISOString() });
+        setForm((current) => ({ ...current, status: "out_of_funnel", funnelExitReason: reason, funnelExitAt: new Date().toISOString() }));
+      } else await onSave({ ...form, companyKey: client.companyKey });
+    } catch (saveError) { setError(saveError.message || "Não foi possível salvar."); }
   }
   async function handleTask(event) {
     event.preventDefault(); setBusyAction("task");
@@ -4984,7 +5069,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
 
   return <div className="modal-backdrop crm-modal-backdrop" onMouseDown={onClose}>
     <section className="client-modal client-modal-v2" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-      <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><div className="client-header-actions"><label>Situação no funil<select value={form.status} disabled={busyAction === "stage" || isSaving} onChange={(event) => changePipelineStage(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select><small>{stageStatus || "Alteração salva automaticamente"}</small></label><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div></header>
+      <header className="client-modal-header"><div><span className="eyebrow">Cliente 360</span><h2>{client.company}</h2><p>{client.owner || "Sem responsável"} · último sinal {client.lastEvent}</p></div><div className="client-header-actions"><label>Situação no funil<select value={form.status} disabled={busyAction === "stage" || isSaving} onChange={(event) => changePipelineStage(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="out_of_funnel">Fora do funil</option></select><small>{stageStatus || (form.status === "out_of_funnel" ? form.funnelExitReason : "Alteração salva automaticamente")}</small></label><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div></header>
       <div className="client-summary-grid"><div><span>Score</span><strong>{client.score}</strong></div><div><span>Ações</span><strong>{client.totalActions}</strong></div><div><span>Itens</span><strong>{visibleItemCount}</strong></div><div><span>Cotações</span><strong>{visibleQuoteCount}</strong></div><div><span>Valor cotado</span><strong>{money(visibleQuoteTotal)}</strong></div><div><span>Reservado agora</span><strong>{client.activeCartQty || 0}</strong></div></div>
       <nav className="client-tabs">{tabs.map(([key, label]) => <button key={key} type="button" className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
       <div className="client-tab-content">
@@ -4997,7 +5082,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
             <label>Empresa<input value={form.companyName} onChange={(event) => update("companyName", event.target.value)} required/></label>
             <label>Código interno<input value={form.customerCode} onChange={(event) => update("customerCode", event.target.value)} placeholder="Código do cliente"/></label>
             <label>Contato<input value={form.contactName} onChange={(event) => update("contactName", event.target.value)} placeholder="Nome da pessoa"/></label>
-            <label>Etapa<select value={form.status} onChange={(event) => update("status", event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}</select></label>
+            <label>Etapa<select value={form.status} onChange={(event) => changePipelineStage(event.target.value)}>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="out_of_funnel">Fora do funil</option></select></label>
             <label>Telefone / WhatsApp<input value={form.phone} onChange={(event) => update("phone", event.target.value)} placeholder="(00) 00000-0000"/></label>
             <label>E-mail<input type="email" value={form.email} onChange={(event) => update("email", event.target.value)}/></label>
             <label>Cidade<input value={form.city} onChange={(event) => update("city", event.target.value)}/></label>
@@ -5015,7 +5100,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
             <label>Responsável<input value={form.owner} onChange={(event) => update("owner", event.target.value)} placeholder="Nome do responsável"/></label>
             <label>Próximo contato<DatePickerField value={form.nextContactAt} onChange={(value) => update("nextContactAt", value)}/></label>
             <label>Valor esperado<CurrencyInput value={form.expectedValue} onChange={(value) => update("expectedValue", value)} placeholder="R$ 2.500,00"/></label>
-            <label>Tags<input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="funilaria, atacado, prioridade"/></label>
+            <label className="wide-field">Tags fixas<ClientTagSelector value={form.tags} onChange={(value) => update("tags", value)}/></label>
             <label className="notes-label">Resumo fixo do cliente<textarea value={form.notes} onChange={(event) => update("notes", event.target.value)} placeholder="Perfil, contexto e informações permanentes. Use Anotações para registrar cada conversa."/></label>
           </div>{error ? <p className="form-error">{error}</p> : null}<div className="client-form-actions"><button type="submit" className="crm-save" disabled={isSaving}><UserCheck size={16}/> {isSaving ? "Salvando..." : "Salvar ficha"}</button>{whatsappDigits ? <a className="whatsapp-link" href={`https://wa.me/${whatsappDigits}`} target="_blank" rel="noreferrer"><Send size={16}/> Abrir WhatsApp</a> : null}<button type="button" className="delete-client-button" onClick={() => onDeleteClient(client)}><Trash2 size={16}/> Excluir cliente</button></div>
         </form> : null}

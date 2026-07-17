@@ -1,7 +1,7 @@
 {
   "project": "Z Connect",
-  "version": "12.8.0",
-  "release": "DEMANDA-MANUAL-E-PERFORMANCE",
+  "version": "12.9.0",
+  "release": "RELATORIOS-TAGS-E-CONTROLE-DE-FUNIL",
   "build": "2026-07-17",
   "environment": "production",
   "notes": [
@@ -9,7 +9,10 @@
     "Demanda não atendida manual integrada ao Cliente 360",
     "Identificação de produto por código ou descrição no snapshot do catálogo",
     "Demanda manual consolidada em interesses e demanda versus estoque",
-    "Salvamento otimista de anotações e demandas"
+    "Salvamento otimista de anotações e demandas",
+    "Tags comerciais fixas com filtros na carteira",
+    "Retirada do funil com motivo sem excluir o cadastro",
+    "Relatórios de ocorrências e recorrências por cliente"
   ],
   "module": "Z Connect Comercial"
 }

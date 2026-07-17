@@ -113,6 +113,8 @@ const CRM_CLIENT_HEADERS = [
   "expectedValue",
   "lastOutcome",
   "lostReason",
+  "funnelExitReason",
+  "funnelExitAt",
   "actionDoneAt",
   "archivedAt",
   "createdAt",
@@ -1403,7 +1405,7 @@ function upsertCrmClient_(data) {
   const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
   if (!companyKey || cleanupReason_(companyName)) return { ok: false, error: "invalid_company" };
 
-  const allowedStatuses = ["new", "contact", "qualified", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost"];
+  const allowedStatuses = ["new", "contact", "qualified", "quoted", "negotiation", "waiting", "won", "active", "cold", "lost", "out_of_funnel"];
   const status = allowedStatuses.indexOf(String(data.status || "")) >= 0 ? String(data.status) : "new";
   const customerCode = String(data.customerCode || "").trim().replace(/\s+/g, " ").slice(0, 80);
   const taxId = String(data.taxId !== undefined ? data.taxId : (data.cpfCnpj !== undefined ? data.cpfCnpj : "")).trim().replace(/\s+/g, "").slice(0, 30);
@@ -1429,6 +1431,8 @@ function upsertCrmClient_(data) {
   const expectedValue = Math.max(0, number_(data.expectedValue || 0));
   const lastOutcome = String(data.lastOutcome || "").trim().slice(0, 40);
   const lostReason = String(data.lostReason || "").trim().slice(0, 180);
+  const funnelExitReason = String(data.funnelExitReason || "").trim().slice(0, 180);
+  const funnelExitAt = String(data.funnelExitAt || "").trim().slice(0, 40);
   const now = new Date();
   const lock = LockService.getScriptLock();
 
@@ -1488,6 +1492,8 @@ function upsertCrmClient_(data) {
       expectedValue: expectedValue,
       lastOutcome: lastOutcome,
       lostReason: lostReason,
+      funnelExitReason: status === "out_of_funnel" ? (funnelExitReason || previousRecord.funnelExitReason || "Outro motivo") : "",
+      funnelExitAt: status === "out_of_funnel" ? (funnelExitAt || previousRecord.funnelExitAt || now) : "",
       actionDoneAt: data.actionDoneAt !== undefined ? String(data.actionDoneAt || "") : (previousRecord.actionDoneAt || ""),
       archivedAt: data.archivedAt !== undefined ? String(data.archivedAt || "") : (previousRecord.archivedAt || ""),
       createdAt: existingCreatedAt || now,
