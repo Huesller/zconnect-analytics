@@ -1975,7 +1975,31 @@ const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp
 function purchaseDays(client = {}) {
   const purchaseDate = new Date(client.lastPurchaseAt || "");
   if (!Number.isNaN(purchaseDate.getTime())) return Math.max(0, Math.floor((Date.now() - purchaseDate.getTime()) / 86400000));
-  return Math.max(0, Math.floor(safeNumber(client.daysWithoutPurchase)));
+  const importedDays = Math.max(0, Math.floor(safeNumber(client.daysWithoutPurchase)));
+  const importDate = new Date(client.createdAt || "");
+  if (!importedDays || Number.isNaN(importDate.getTime())) return importedDays;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  importDate.setHours(0, 0, 0, 0);
+  const elapsedSinceImport = Math.max(0, Math.floor((today.getTime() - importDate.getTime()) / 86400000));
+  return importedDays + elapsedSinceImport;
+}
+
+function dateDaysAgo(value, reference = new Date()) {
+  const days = Math.max(0, Math.floor(safeNumber(value)));
+  const date = new Date(reference);
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() - days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function normalizePurchaseReference(form = {}) {
+  if (String(form.lastPurchaseAt || "").trim()) return form;
+  const days = Math.max(0, Math.floor(safeNumber(form.daysWithoutPurchase)));
+  return days ? { ...form, lastPurchaseAt: dateDaysAgo(days) } : form;
 }
 
 function commercialHealth(client = {}) {
@@ -3068,7 +3092,7 @@ function App() {
   async function saveClientProfile(form) {
     setIsSavingCrm(true);
     try {
-      const saved = await postAnalyticsAction("upsert_crm_client", form);
+      const saved = await postAnalyticsAction("upsert_crm_client", normalizePurchaseReference(form));
       const normalized = {
         ...saved.client,
         companyKey: String(saved.client.companyKey || companyKey(form.companyName)),
@@ -3157,7 +3181,7 @@ function App() {
     setIsSavingCrm(true);
     try {
       const clients = rows.filter((row) => row.valid && row.action !== "skip").map((row) => ({
-        ...row,
+        ...normalizePurchaseReference(row),
         owner: owner || authProfile.username,
         status: status || "new"
       }));
@@ -4629,8 +4653,8 @@ function NewClientModal({ owner, onClose, onSave, isSaving }) {
       <label>UF<input maxLength="2" value={form.state} onChange={(event) => update("state", event.target.value.toUpperCase())}/></label>
       <label className="wide-field">Endereço<input value={form.address} onChange={(event) => update("address", event.target.value)}/></label>
       <label>Rota<input value={form.route} onChange={(event) => update("route", event.target.value)}/></label>
-      <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => update("daysWithoutPurchase", event.target.value)}/></label>
-      <label>Última compra<input type="date" value={form.lastPurchaseAt} onChange={(event) => update("lastPurchaseAt", event.target.value)}/></label>
+      <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => { const days = event.target.value; setForm((current) => ({ ...current, daysWithoutPurchase: days, lastPurchaseAt: days === "" ? "" : dateDaysAgo(days) })); }}/></label>
+      <label>Última compra<input type="date" value={form.lastPurchaseAt} onChange={(event) => { const lastPurchaseAt = event.target.value; setForm((current) => ({ ...current, lastPurchaseAt, daysWithoutPurchase: lastPurchaseAt ? purchaseDays({ lastPurchaseAt }) : current.daysWithoutPurchase })); }}/></label>
       <label>Valor da última compra<CurrencyInput value={form.lastPurchaseValue} onChange={(value) => update("lastPurchaseValue", value)}/></label>
       <label>Total comprado<CurrencyInput value={form.purchaseTotal} onChange={(value) => update("purchaseTotal", value)}/></label>
       <label>Quantidade de compras<input type="number" min="0" value={form.purchaseCount} onChange={(event) => update("purchaseCount", event.target.value)}/></label>
@@ -4802,8 +4826,8 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
             <label>CPF/CNPJ<input value={form.taxId} onChange={(event) => update("taxId", event.target.value)} placeholder="00.000.000/0000-00"/></label>
             <label>Rota<input value={form.route} onChange={(event) => update("route", event.target.value)} placeholder="Rota comercial ou região"/></label>
             <label className="wide-field">Endereço<input value={form.address} onChange={(event) => update("address", event.target.value)} placeholder="Logradouro, número e bairro"/></label>
-            <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => update("daysWithoutPurchase", event.target.value)} placeholder="0"/></label>
-            <label>Data da última compra<input type="date" value={form.lastPurchaseAt} onChange={(event) => update("lastPurchaseAt", event.target.value)}/></label>
+            <label>Dias sem comprar<input type="number" min="0" value={form.daysWithoutPurchase} onChange={(event) => { const days = event.target.value; setForm((current) => ({ ...current, daysWithoutPurchase: days, lastPurchaseAt: days === "" ? "" : dateDaysAgo(days) })); }} placeholder="0"/><small>Atualizado automaticamente a partir da data da última compra.</small></label>
+            <label>Data da última compra<input type="date" value={form.lastPurchaseAt} onChange={(event) => { const lastPurchaseAt = event.target.value; setForm((current) => ({ ...current, lastPurchaseAt, daysWithoutPurchase: lastPurchaseAt ? purchaseDays({ lastPurchaseAt }) : current.daysWithoutPurchase })); }}/></label>
             <label>Valor da última compra<CurrencyInput value={form.lastPurchaseValue} onChange={(value) => update("lastPurchaseValue", value)}/></label>
             <label>Total comprado<CurrencyInput value={form.purchaseTotal} onChange={(value) => update("purchaseTotal", value)}/></label>
             <label>Quantidade de compras<input type="number" min="0" value={form.purchaseCount} onChange={(event) => update("purchaseCount", event.target.value)}/></label>
