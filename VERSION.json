@@ -1,8 +1,8 @@
 {
   "project": "Z Connect",
-  "version": "12.9.0",
-  "release": "RELATORIOS-TAGS-E-CONTROLE-DE-FUNIL",
-  "build": "2026-07-17",
+  "version": "12.10.0",
+  "release": "FUNIL-ATIVO-TAREFAS-RAPIDAS-E-HISTORICO",
+  "build": "2026-07-20",
   "environment": "production",
   "notes": [
     "Classificação comercial de anotações atualizada",
@@ -12,7 +12,14 @@
     "Salvamento otimista de anotações e demandas",
     "Tags comerciais fixas com filtros na carteira",
     "Retirada do funil com motivo sem excluir o cadastro",
-    "Relatórios de ocorrências e recorrências por cliente"
+    "Relatórios de ocorrências e recorrências por cliente",
+    "Carteira separada das oportunidades comerciais ativas",
+    "Pedidos fechados e perdas removidos do Kanban sem perder histórico",
+    "Criação, conclusão e cancelamento otimistas de tarefas",
+    "Tarefas com data e horário",
+    "Histórico de tarefas concluídas e canceladas por cliente",
+    "Gravação direta de novas tarefas no Google Apps Script",
+    "Cache curto de validação de escopo no proxy seguro"
   ],
   "module": "Z Connect Comercial"
 }

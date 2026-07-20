@@ -67,7 +67,7 @@ const EVENT_LABELS = {
 };
 
 const PIPELINE_STAGES = [
-  { key: "new", label: "Novo cliente" },
+  { key: "new", label: "Novo interesse" },
   { key: "contact", label: "Em contato" },
   { key: "qualified", label: "Oportunidade identificada" },
   { key: "quoted", label: "Cotação enviada" },
@@ -76,6 +76,8 @@ const PIPELINE_STAGES = [
   { key: "won", label: "Pedido fechado" },
   { key: "lost", label: "Perdido" }
 ];
+
+const ACTIVE_PIPELINE_STAGE_KEYS = new Set(["new", "contact", "qualified", "quoted", "negotiation", "waiting"]);
 
 const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desistiu", "Comprou de outro fornecedor", "Outro"];
 const CLIENT_TAGS = ["Venda sob encomenda", "Cliente potencial", "Cliente bloqueado", "Linha mecânica", "Compra recorrente", "Cliente em reativação"];
@@ -302,7 +304,7 @@ function duplicateCompanyKey(value) {
 
 function crmStatusLabel(status) {
   const labels = {
-    new: "Novo cliente",
+    new: "Novo interesse",
     contact: "Em contato",
     qualified: "Oportunidade identificada",
     quoted: "Cotação enviada",
@@ -315,6 +317,16 @@ function crmStatusLabel(status) {
     out_of_funnel: "Fora do funil"
   };
   return labels[status] || labels.new;
+}
+
+function hasCommercialOpportunity(client, activities = [], tasks = [], demands = []) {
+  if (!client || !ACTIVE_PIPELINE_STAGE_KEYS.has(client.statusKey)) return false;
+  if (client.statusKey !== "new") return true;
+  if (safeNumber(client.totalActions) > 0 || safeNumber(client.activeCartQty) > 0 || safeNumber(client.quotes) > 0 || safeNumber(client.expectedValue) > 0) return true;
+  const key = client.companyKey;
+  return tasks.some((task) => task.companyKey === key && task.status === "open")
+    || activities.some((activity) => activity.companyKey === key && !activity.deletedAt && activity.type !== "stage_change")
+    || demands.some((demand) => companyKey(demand.companyKey || demand.companyName) === key && !["resolved", "cancelled"].includes(String(demand.status || "open")));
 }
 
 function parseClientTags(value) {
@@ -672,6 +684,11 @@ function localDateInput(date = new Date()) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+function localDateTimeInput(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function isSamePeriod(dateLike, selected, customStart = "", customEnd = "") {
   if (selected === "all") return true;
   const d = new Date(dateLike);
@@ -802,13 +819,14 @@ function CurrencyInput({ value, onChange, placeholder = "R$ 0,00", ...props }) {
 
 function DatePickerField({ value, onChange, min, max, required = false }) {
   const inputRef = useRef(null);
+  const includesTime = String(value || "").includes("T");
   function openPicker() {
     const input = inputRef.current;
     if (!input) return;
     input.focus();
     if (typeof input.showPicker === "function") input.showPicker();
   }
-  return <span className="date-picker-field"><input ref={inputRef} type="date" value={value} min={min} max={max} required={required} onChange={(event) => onChange(event.target.value)}/><button type="button" onClick={openPicker} aria-label="Abrir calendário"><CalendarDays size={16}/></button></span>;
+  return <span className="date-picker-field"><input ref={inputRef} type={includesTime ? "datetime-local" : "date"} value={value} min={min} max={max} required={required} onChange={(event) => onChange(event.target.value)}/><button type="button" onClick={openPicker} aria-label={includesTime ? "Abrir data e horário" : "Abrir calendário"}><CalendarDays size={16}/></button></span>;
 }
 
 function dateTime(value) {
@@ -832,7 +850,11 @@ function crmContactDate(value) {
 
 function dateOnly(value) {
   const date = crmContactDate(value);
-  return date ? date.toLocaleDateString("pt-BR") : "-";
+  if (!date) return "-";
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value || ""))) {
+    return date.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("pt-BR");
 }
 
 function timeOnly(value) {
@@ -2091,7 +2113,7 @@ function buildActionCenterRows(opportunities, tasks, crmRows) {
       score: 0
     };
     const due = crmContactDate(task.dueAt);
-    const overdue = due && due.getTime() < startOfDay(now).getTime();
+    const overdue = due && due.getTime() < now.getTime();
     const dueToday = due && due.toDateString() === now.toDateString();
     const priority = overdue ? 125 : dueToday ? 115 : task.priority === "urgent" ? 110 : task.priority === "high" ? 95 : 75;
     return {
@@ -2103,7 +2125,7 @@ function buildActionCenterRows(opportunities, tasks, crmRows) {
       priority,
       level: overdue ? "urgent" : priority >= 110 ? "hot" : "high",
       reason: overdue ? `Retorno atrasado: ${task.title}` : dueToday ? `Retorno para hoje: ${task.title}` : task.title,
-      interest: task.dueAt ? `Prazo: ${dateOnly(task.dueAt)}` : "Sem prazo definido"
+      interest: task.dueAt ? `Prazo: ${dateTime(task.dueAt)}` : "Sem prazo definido"
     };
   });
   const opportunityActions = opportunities.map((item) => ({ ...item, actionType: "opportunity", id: `action-${item.id}` }));
@@ -3264,34 +3286,54 @@ function App() {
   }
 
   async function saveCrmTask(form) {
+    const temporaryId = `LOCAL-TASK-${Date.now()}`;
+    const optimistic = normalizeCrmTask({ ...form, taskId: temporaryId, status: "open", createdAt: new Date().toISOString() });
+    setCrmTasks((current) => [optimistic, ...current]);
     try {
       const result = await postAnalyticsAction("upsert_crm_task", form);
       const task = normalizeCrmTask(result.task);
-      setCrmTasks((current) => [task, ...current.filter((item) => String(item.taskId || item.id) !== task.taskId)]);
+      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === temporaryId ? task : item));
       showToast("Tarefa comercial criada.");
       return task;
     } catch (error) {
+      setCrmTasks((current) => current.filter((item) => String(item.taskId || item.id) !== temporaryId));
       showToast(error.message || "Não foi possível criar a tarefa.", "error");
       throw error;
     }
   }
 
   async function completeCrmTask(taskId) {
+    let previous;
+    setCrmTasks((current) => current.map((item) => {
+      if (String(item.taskId || item.id) !== taskId) return item;
+      previous = item;
+      return { ...item, status: "done", completedAt: new Date().toISOString(), savingState: "saving" };
+    }));
     try {
       await postAnalyticsAction("complete_crm_task", { taskId });
-      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? { ...item, status: "done", completedAt: new Date().toISOString() } : item));
+      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? { ...item, savingState: "saved" } : item));
       showToast("Tarefa concluída.");
     } catch (error) {
+      if (previous) setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? previous : item));
       showToast(error.message || "Não foi possível concluir a tarefa.", "error");
     }
   }
 
   async function cancelCrmTask(taskId) {
+    let previous;
+    setCrmTasks((current) => current.map((item) => {
+      if (String(item.taskId || item.id) !== taskId) return item;
+      previous = item;
+      return { ...item, status: "cancelled", completedAt: new Date().toISOString(), savingState: "saving" };
+    }));
     try {
       await postAnalyticsAction("cancel_crm_task", { taskId });
-      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? { ...item, status: "cancelled", completedAt: new Date().toISOString() } : item));
+      setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? { ...item, savingState: "saved" } : item));
       showToast("Tarefa excluída da fila.");
-    } catch (error) { showToast(error.message || "Não foi possível excluir a tarefa.", "error"); }
+    } catch (error) {
+      if (previous) setCrmTasks((current) => current.map((item) => String(item.taskId || item.id) === taskId ? previous : item));
+      showToast(error.message || "Não foi possível excluir a tarefa.", "error");
+    }
   }
 
   async function completeCrmAction(row) {
@@ -3746,12 +3788,13 @@ function App() {
   }
 
   const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");
-  const funnelRows = crmRows.filter((item) => item.statusKey !== "out_of_funnel");
+  const funnelRows = crmRows.filter((item) => hasCommercialOpportunity(item, normalizedActivities, normalizedTasks, filteredManualDemands));
+  const closedFunnelRows = crmRows.filter((item) => ["won", "lost"].includes(item.statusKey));
   const outOfFunnelRows = crmRows.filter((item) => item.statusKey === "out_of_funnel");
   const navigation = [
     { id: "overview", label: "Visão geral", icon: <TrendingUp size={17}/> },
     { id: "opportunities", label: "Ações agora", icon: <AlertTriangle size={17}/>, badge: actionRows.filter((item) => item.priority >= 80).length },
-    { id: "pipeline", label: "Funil", icon: <Filter size={17}/>, badge: funnelRows.filter((item) => !["won", "lost"].includes(item.statusKey)).length },
+    { id: "pipeline", label: "Funil", icon: <Filter size={17}/>, badge: funnelRows.length },
     { id: "crm", label: "Clientes CRM", icon: <Building2 size={17}/>, badge: crmRows.length },
     { id: "notes", label: "Anotações", icon: <MessageSquare size={17}/>, badge: normalizedActivities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type)).length },
     { id: "reports", label: "Relatórios", icon: <TrendingUp size={17}/> },
@@ -3766,7 +3809,7 @@ function App() {
   const viewDescriptions = {
     overview: "Os números essenciais para decidir rápido.",
     opportunities: "A fila diária combina retornos, carrinhos, cotações e sinais de compra.",
-    pipeline: "Arraste os clientes entre as etapas e acompanhe o avanço comercial.",
+    pipeline: "Somente oportunidades ativas; toda a carteira permanece disponível em Clientes CRM.",
     crm: "Histórico, responsável, etapa e próximo contato de cada cliente real.",
     notes: "Conversas, próximos passos e pendências organizados por cliente.",
     reports: "Ocorrências, recorrências, clientes e motivos comerciais consolidados.",
@@ -3950,6 +3993,7 @@ function App() {
           ]}/>
           <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Cadastrar cliente</button><span>O cliente será incluído diretamente na etapa escolhida.</span></div>
           <PipelineBoard rows={funnelRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} onOpen={openClientProfile} onMove={moveClientStage}/>
+          <section className="pipeline-closed-summary"><div><strong>{closedFunnelRows.filter((item) => item.statusKey === "won").length}</strong><span>pedidos fechados no histórico</span></div><div><strong>{closedFunnelRows.filter((item) => item.statusKey === "lost").length}</strong><span>oportunidades perdidas no histórico</span></div><p>Ganhos e perdas não ocupam o Kanban ativo e continuam disponíveis nos relatórios e no Cliente 360.</p></section>
         </div>
       ) : null}
 
@@ -4373,13 +4417,13 @@ function PipelineBoard({ rows = [], activities = [], tasks = [], onOpen, onMove 
   return (
     <>
       <nav className="pipeline-stage-nav" aria-label="Ir para uma etapa do funil">
-        {PIPELINE_STAGES.map((stage) => {
+        {PIPELINE_STAGES.filter((stage) => ACTIVE_PIPELINE_STAGE_KEYS.has(stage.key)).map((stage) => {
           const count = rows.filter((row) => row.statusKey === stage.key).length;
           return <button type="button" key={stage.key} className={selectedStage === stage.key ? "active" : ""} onClick={() => jumpToStage(stage.key)}><span>{stage.label}</span><b>{count}</b></button>;
         })}
       </nav>
       <section className="pipeline-board">
-        {PIPELINE_STAGES.map((stage) => {
+        {PIPELINE_STAGES.filter((stage) => ACTIVE_PIPELINE_STAGE_KEYS.has(stage.key)).map((stage) => {
           const stageRows = rows.filter((row) => row.statusKey === stage.key).sort((a, b) => pipelineNextAction(a, activities, tasks).time - pipelineNextAction(b, activities, tasks).time);
           const stageValue = stageRows.reduce((sum, row) => sum + safeNumber(row.expectedValue || row.quoteTotalNumber), 0);
           return (
@@ -4701,7 +4745,7 @@ function LegacyClientProfileModal({ client, events = [], reservations = [], task
     lastOutcome: client.lastOutcome || "",
     lostReason: client.lostReason || ""
   });
-  const [taskForm, setTaskForm] = useState({ preset: "Ligar", title: "Ligar", dueAt: localDateInput(new Date()), priority: "normal" });
+  const [taskForm, setTaskForm] = useState({ preset: "Ligar", title: "Ligar", dueAt: localDateTimeInput(new Date()), priority: "normal" });
   const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
   const [busyAction, setBusyAction] = useState("");
   const [error, setError] = useState("");
@@ -4910,7 +4954,7 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     nextContactAt: initialContactDate ? localDateInput(initialContactDate) : "", tags: client.tags || "", notes: client.notes || "",
     expectedValue: client.expectedValue || "", lastOutcome: client.lastOutcome || "", lostReason: client.lostReason || "", funnelExitReason: client.funnelExitReason || "", funnelExitAt: client.funnelExitAt || ""
   });
-  const [taskForm, setTaskForm] = useState({ preset: "Ligar", title: "Ligar", dueAt: localDateInput(new Date()), priority: "normal" });
+  const [taskForm, setTaskForm] = useState({ preset: "Ligar", title: "Ligar", dueAt: localDateTimeInput(new Date()), priority: "normal" });
   const [outcome, setOutcome] = useState({ type: "won", value: client.expectedValue || "", reason: "", note: "" });
   const [noteForm, setNoteForm] = useState({ type: "whatsapp_sent", note: "", nextAction: "", nextActionAt: "", actionStatus: "" });
   const [demandForm, setDemandForm] = useState({ productQuery: "", productCode: "", productName: "", brand: "", stockQty: 0, requestedQty: 1, source: "whatsapp", note: "" });
@@ -4942,6 +4986,9 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     ...timelineEvents.map((event) => ({ kind: "event", value: event, timestamp: event.timestamp }))
   ], (item) => item.timestamp), [activities, timelineEvents]);
   const openTasks = tasks.filter((task) => task.status === "open");
+  const closedTasks = useMemo(() => tasks
+    .filter((task) => ["done", "cancelled"].includes(task.status))
+    .sort((a, b) => new Date(b.completedAt || b.createdAt || 0) - new Date(a.completedAt || a.createdAt || 0)), [tasks]);
   const whatsappDigits = whatsappPhone(form.phone);
 
   useEffect(() => {
@@ -5120,6 +5167,8 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
         {tab === "notes" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Histórico de contatos e anotações</h3><p>Registre cada tentativa, conversa e próximo passo. A primeira tentativa move automaticamente o cliente para Em contato.</p></div></div><form className="crm-note-form" onSubmit={handleNote}><label>Resultado do contato<select value={noteForm.type} onChange={(event) => setNoteForm((current) => ({ ...current, type: event.target.value }))}>{CONTACT_ACTIVITY_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label className="note-text">Informação<textarea value={noteForm.note} onChange={(event) => setNoteForm((current) => ({ ...current, note: event.target.value }))} placeholder="Ex.: falei com o cliente, informou que fará o pedido amanhã..." required/></label><label>Próxima ação<input value={noteForm.nextAction} onChange={(event) => setNoteForm((current) => ({ ...current, nextAction: event.target.value }))} placeholder="Ex.: ligar novamente"/></label><label>Data da ação<input type="date" value={noteForm.nextActionAt} onChange={(event) => setNoteForm((current) => ({ ...current, nextActionAt: event.target.value, actionStatus: event.target.value ? "pending" : "" }))}/></label><div><button disabled={busyAction === "note"}><MessageSquare size={15}/> {editingNote ? "Salvar alteração" : "Adicionar ao histórico"}</button>{editingNote ? <button type="button" className="secondary-button" onClick={() => { setEditingNote(null); setNoteForm({ type: "whatsapp_sent", note: "", nextAction: "", nextActionAt: "", actionStatus: "" }); }}>Cancelar edição</button> : null}</div></form><div className="crm-note-list">{noteActivities.map((activity) => <article key={activity.activityId}><header><span><strong>{noteTypeLabel(activity.type)}</strong><small>{activity.owner || "Sem responsável"} · {activity.createdAtLabel}{activity.updatedAtRaw ? ` · editado ${activity.updatedAtLabel}` : ""}</small></span><span><button type="button" onClick={() => { setEditingNote(activity); setNoteForm({ type: activity.type, note: activity.note, nextAction: activity.nextAction || "", nextActionAt: activity.nextActionAt || "", actionStatus: activity.actionStatus || "" }); }}><Pencil size={14}/> Editar</button><button type="button" className="danger" onClick={() => onDeleteNote(activity.activityId)}><Trash2 size={14}/> Excluir</button></span></header><p>{activity.note}</p>{activity.nextAction ? <footer><CalendarDays size={14}/><strong>{activity.nextAction}</strong><span>{activity.nextActionAt ? dateOnly(activity.nextActionAt) : "Sem data"}</span><em className={`note-action-${activity.actionStatus || "pending"}`}>{activity.actionStatus === "done" ? "Concluída" : "Pendente"}</em></footer> : null}</article>)}{!noteActivities.length ? <EmptyState message="Nenhuma anotação registrada. O primeiro contato pode ser adicionado acima."/> : null}</div></section> : null}
 
         {tab === "tasks" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Tarefas e retornos</h3><p>Defina o próximo passo e seja avisado quando o prazo chegar.</p></div></div><form className="task-form task-form-v2" onSubmit={handleTask}><label>Ação<div className="task-action-picker"><select value={taskForm.preset} onChange={(event) => { const preset = event.target.value; setTaskForm((current) => ({ ...current, preset, title: preset === "custom" ? "" : preset })); }}><option value="" disabled>Escolha uma ação</option>{TASK_PRESETS.map((title) => <option key={title} value={title}>{title}</option>)}<option value="custom">Outra tarefa...</option></select>{taskForm.preset === "custom" ? <input value={taskForm.title} onChange={(event) => setTaskForm((current) => ({ ...current, title: event.target.value }))} placeholder="Digite a tarefa" autoFocus required/> : null}</div></label><label>Data<DatePickerField value={taskForm.dueAt} onChange={(value) => setTaskForm((current) => ({ ...current, dueAt: value }))} required/></label><label>Prioridade<select value={taskForm.priority} onChange={(event) => setTaskForm((current) => ({ ...current, priority: event.target.value }))}><option value="normal">Normal</option><option value="high">Alta</option><option value="urgent">Urgente</option></select></label><button disabled={busyAction === "task"}>Adicionar tarefa</button></form><div className="task-list task-list-v2">{openTasks.map((task) => <div key={task.taskId}><span><strong>{task.title}</strong><small>{task.dueAt ? dateOnly(task.dueAt) : "Sem prazo"} · {task.owner || "Sem responsável"}</small></span><span className="task-row-actions"><button type="button" onClick={() => onCompleteTask(task.taskId)}>Concluir</button><button type="button" className="danger" onClick={() => onCancelTask(task.taskId)}>Excluir</button></span></div>)}{!openTasks.length ? <EmptyState message="Nenhuma tarefa aberta."/> : null}</div><section className="outcome-card"><h3>Registrar resultado</h3><form onSubmit={handleOutcome}><select value={outcome.type} onChange={(event) => setOutcome((current) => ({ ...current, type: event.target.value }))}><option value="won">Pedido fechado</option><option value="lost">Oportunidade perdida</option></select><CurrencyInput value={outcome.value} onChange={(value) => setOutcome((current) => ({ ...current, value }))} placeholder="R$ 0,00"/>{outcome.type === "lost" ? <select value={outcome.reason} onChange={(event) => setOutcome((current) => ({ ...current, reason: event.target.value }))} required><option value="">Motivo da perda</option>{LOST_REASONS.map((reason) => <option key={reason}>{reason}</option>)}</select> : null}<input value={outcome.note} onChange={(event) => setOutcome((current) => ({ ...current, note: event.target.value }))} placeholder="Observação"/><button disabled={busyAction === "outcome"}>{busyAction === "outcome" ? "Registrando..." : "Registrar"}</button></form></section></section> : null}
+
+        {tab === "tasks" && closedTasks.length ? <details className="task-history"><summary>Histórico de tarefas <b>{closedTasks.length}</b></summary><div className="task-history-list">{closedTasks.map((task) => <div className="task-history-row" key={task.taskId}><span><strong>{task.title}</strong><small>{task.owner || "Sem responsável"} · prazo {task.dueAt ? dateOnly(task.dueAt) : "não informado"}</small></span><em className={task.status}>{task.status === "done" ? "Concluída" : "Cancelada"}</em><time>{task.completedAt ? dateTime(task.completedAt) : "Data não informada"}</time></div>)}</div></details> : null}
 
         {tab === "history" ? <section className="client-tab-panel"><div className="tab-panel-head"><div><h3>Linha do tempo</h3><p>Organizada por dia; clique na data para abrir as informações.</p></div></div><div className="client-timeline date-group-list">{historyGroups.map((group, index) => <details className="date-group" key={group.key} open={index === 0}><summary><span><CalendarDays size={15}/><strong>{group.label}</strong></span><b>{group.items.length} atividade(s)</b><ChevronDown size={15}/></summary><div>{group.items.map((item) => item.kind === "crm" ? <div key={item.value.activityId}><i className={`activity-${item.value.type}`}/><span><strong>{item.value.type === "won" ? "Pedido fechado" : item.value.type === "lost" ? "Perda registrada" : item.value.type === "stage_change" ? "Etapa alterada" : "Atividade CRM"}</strong><small>{item.value.note || item.value.reason || `${crmStatusLabel(item.value.stageFrom)} → ${crmStatusLabel(item.value.stageTo)}`}</small></span><time>{timeOnly(item.timestamp)}</time></div> : <div key={`${item.value.id}-${item.timestamp}`}><i/><span><strong>{EVENT_LABELS[item.value.event] || item.value.event}</strong><small>{eventDetail(item.value)}</small></span><time>{timeOnly(item.timestamp)}</time></div>)}</div></details>)}{!historyGroups.length ? <EmptyState message="Sem eventos para este cliente."/> : null}</div></section> : null}
       </div>

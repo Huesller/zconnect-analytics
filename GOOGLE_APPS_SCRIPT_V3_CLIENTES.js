@@ -1621,6 +1621,7 @@ function upsertCrmTask_(data) {
   const companyKey = normalizeCompanyKey_(data.companyKey || companyName);
   const title = String(data.title || "").trim().replace(/\s+/g, " ").slice(0, 220);
   if (!companyKey || !title || cleanupReason_(companyName)) return { ok: false, error: "invalid_task" };
+  const isNewTask = !String(data.taskId || "").trim();
   const taskId = String(data.taskId || uniqueId_("TASK")).trim().slice(0, 80);
   const priority = ["low", "normal", "high", "urgent"].indexOf(String(data.priority || "")) >= 0 ? String(data.priority) : "normal";
   const requestedStatus = String(data.status || "open");
@@ -1642,8 +1643,13 @@ function upsertCrmTask_(data) {
   try { lock.waitLock(10000); } catch (err) { return { ok: false, error: "task_busy" }; }
   try {
     const sheet = getCrmTasksSheet_();
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+    const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
+    if (isNewTask) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
+      return { ok: true, task: record };
+    }
     const values = sheet.getDataRange().getValues();
-    const headers = values[0].map(String);
     const idIndex = headers.indexOf("taskId");
     let rowNumber = 0;
     for (let index = 1; index < values.length; index++) {
@@ -1654,9 +1660,8 @@ function upsertCrmTask_(data) {
         break;
       }
     }
-    const row = headers.map(function(header) { return record[header] !== undefined ? record[header] : ""; });
     if (rowNumber) sheet.getRange(rowNumber, 1, 1, headers.length).setValues([row]);
-    else sheet.appendRow(row);
+    else sheet.getRange(sheet.getLastRow() + 1, 1, 1, headers.length).setValues([row]);
     return { ok: true, task: record };
   } finally { lock.releaseLock(); }
 }

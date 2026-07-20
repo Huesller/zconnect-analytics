@@ -1,5 +1,8 @@
 import { json, requireSession } from "../lib/server-auth.js";
 
+const UPSTREAM_READ_CACHE = new Map();
+const UPSTREAM_READ_TTL_MS = 15000;
+
 function parseBody(req) {
   if (!req.body) return {};
   if (typeof req.body === "object") return req.body;
@@ -60,12 +63,17 @@ async function scopeImportClients(apiUrl, adminToken, body, profile, signal) {
 }
 
 async function readUpstream(apiUrl, adminToken, action, signal) {
+  const cacheKey = `${apiUrl}|${action}`;
+  const cached = UPSTREAM_READ_CACHE.get(cacheKey);
+  if (cached && Date.now() - cached.savedAt < UPSTREAM_READ_TTL_MS) return cached.data;
   const url = new URL(apiUrl);
   url.searchParams.set("action", action);
   url.searchParams.set("adminToken", adminToken);
   url.searchParams.set("proxyCache", String(Date.now()));
   const response = await fetch(url, { signal, cache: "no-store" });
-  return response.json().catch(() => ({}));
+  const data = await response.json().catch(() => ({}));
+  if (response.ok) UPSTREAM_READ_CACHE.set(cacheKey, { savedAt: Date.now(), data });
+  return data;
 }
 
 async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, signal) {
