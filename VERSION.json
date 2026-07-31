@@ -1,10 +1,12 @@
 {
   "project": "Z Connect",
-  "version": "12.10.2",
-  "release": "TAG-FORA-DO-PERFIL",
+  "version": "12.10.3",
+  "release": "FILTROS-DIARIOS",
   "build": "2026-07-31",
   "environment": "production",
   "notes": [
+    "Filtros Hoje, Ontem, data específica e períodos personalizados em anotações e relatórios",
+    "Indicadores e exportações respeitam todos os filtros ativos",
     "Tag Fora do perfil remove automaticamente o cliente do funil ativo sem excluir cadastro ou histórico",
     "Classificação comercial de anotações atualizada",
     "Demanda não atendida manual integrada ao Cliente 360",

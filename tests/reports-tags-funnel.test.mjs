@@ -32,3 +32,11 @@ test("relatório consolida ocorrências e recorrências por cliente", () => {
   assert.match(source, /Por cliente/);
   assert.match(source, /Exportar Excel/);
 });
+
+test("anotações e relatórios aceitam filtros diários e por data", () => {
+  assert.match(source, /Data específica/);
+  assert.match(source, /Período personalizado/);
+  assert.match(source, /isSamePeriod\(activity\.createdAtRaw, "custom", selectedDate, selectedDate\)/);
+  assert.match(source, /isSamePeriod\(item\.createdAtRaw, "custom", periodStart, periodEnd\)/);
+  assert.match(source, /const rows = visible\.map/);
+});
