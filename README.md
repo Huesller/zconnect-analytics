@@ -1,4 +1,4 @@
-# Z Connect Comercial 12.10.0
+# Z Connect Comercial 12.10.2
 
 Central comercial da Z Automotiva: CRM, Cliente 360, funil, tarefas, cotações, inteligência de produtos e integração com o catálogo online.
 
@@ -9,6 +9,25 @@ Central comercial da Z Automotiva: CRM, Cliente 360, funil, tarefas, cotações,
 3. Execute `npm test` e `npm run build`.
 4. Publique na Vercel.
 5. Atualize o Google Apps Script com `GOOGLE_APPS_SCRIPT_V3_CLIENTES.js` e crie uma nova implantação do Web App.
+
+## Novos acessos de consultor
+
+O gerador seguro `scripts/generate-multiuser-config.mjs` inclui os usuários `almir` e `gabriel`. Execute `node scripts/generate-multiuser-config.mjs`, defina senhas temporárias fortes e atualize a variável sensível `ANALYTICS_USERS_JSON` na Vercel. As senhas nunca ficam gravadas no projeto.
+
+- `almir` enxerga somente os dados do consultor `almir`.
+- `gabriel` enxerga os dados identificados como `gabriel` ou `gabriel-zatt`.
+
+## Versão 12.10.2
+
+- Nova tag fixa `Fora do perfil`.
+- Ao salvar um cliente com essa tag, ele sai automaticamente do funil ativo sem perder cadastro ou histórico.
+- A tag está disponível no filtro da carteira de clientes.
+
+## Versão 12.10.1
+
+- Acesso individual de CRM para Almir e Gabriel Zatt.
+- Escopo comercial isolado por consultor.
+- Integração com os links individuais do catálogo e com o painel de valores especiais.
 
 ## Versão 12.10.0
 

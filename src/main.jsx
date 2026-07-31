@@ -80,8 +80,8 @@ const PIPELINE_STAGES = [
 const ACTIVE_PIPELINE_STAGE_KEYS = new Set(["new", "contact", "qualified", "quoted", "negotiation", "waiting"]);
 
 const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desistiu", "Comprou de outro fornecedor", "Outro"];
-const CLIENT_TAGS = ["Venda sob encomenda", "Cliente potencial", "Cliente bloqueado", "Linha mecânica", "Compra recorrente", "Cliente em reativação"];
-const FUNNEL_EXIT_REASONS = ["Linha mecânica — não atendemos", "Cliente bloqueado", "Fora da região atendida", "Segmento não atendido", "Cliente sem interesse", "Outro motivo"];
+const CLIENT_TAGS = ["Venda sob encomenda", "Cliente potencial", "Cliente bloqueado", "Linha mecânica", "Fora do perfil", "Compra recorrente", "Cliente em reativação"];
+const FUNNEL_EXIT_REASONS = ["Linha mecânica — não atendemos", "Cliente bloqueado", "Fora do perfil", "Fora da região atendida", "Segmento não atendido", "Cliente sem interesse", "Outro motivo"];
 const CONTACT_ACTIVITY_TYPES = ["whatsapp_sent", "contact_return", "not_answered", "call_completed", "quote_sent", "missing_stock", "high_price", "no_return", "negotiation_note", "sale_completed_note"];
 const CONTACT_ACTIVITY_OPTIONS = [
   ["whatsapp_sent", "WhatsApp enviado"], ["contact_return", "Retorno de contato"],
@@ -5025,6 +5025,15 @@ function ClientProfileModal({ client, events = [], reservations = [], tasks = []
     event.preventDefault(); setError("");
     try {
       const tags = parseClientTags(form.tags);
+      const shouldExitAutomatically = form.status !== "out_of_funnel" && tags.includes("Fora do perfil");
+      if (shouldExitAutomatically) {
+        const funnelExitAt = new Date().toISOString();
+        await onSave({ ...form, companyKey: client.companyKey, status: "out_of_funnel", funnelExitReason: "Fora do perfil", funnelExitAt });
+        setForm((current) => ({ ...current, status: "out_of_funnel", funnelExitReason: "Fora do perfil", funnelExitAt }));
+        setStageStatus("Retirado do funil — Fora do perfil");
+        window.setTimeout(() => setStageStatus(""), 1800);
+        return;
+      }
       const shouldOfferExit = form.status !== "out_of_funnel" && (tags.includes("Cliente bloqueado") || tags.includes("Linha mecânica"));
       if (shouldOfferExit && window.confirm("Esta tag normalmente indica que o cliente não deve permanecer no funil ativo. Deseja retirar este cliente do funil agora?")) {
         const reason = tags.includes("Cliente bloqueado") ? "Cliente bloqueado" : "Linha mecânica — não atendemos";

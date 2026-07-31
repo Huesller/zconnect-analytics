@@ -6,6 +6,8 @@ const USERS = [
   { username: "admin", displayName: "Administrador", role: "admin", consultants: ["*"] },
   { username: "huesller", displayName: "Huesller", role: "consultant", consultants: ["huesller"] },
   { username: "ney", displayName: "Ney", role: "consultant", consultants: ["ney", "ivoney"] },
+  { username: "almir", displayName: "Almir", role: "consultant", consultants: ["almir"] },
+  { username: "gabriel", displayName: "Gabriel Zatt", role: "consultant", consultants: ["gabriel", "gabriel-zatt"] },
   { username: "junior", displayName: "Junior", role: "consultant", consultants: ["junior"] },
   { username: "francisco", displayName: "Francisco", role: "representative", consultants: ["francisco", "representante"] }
 ];

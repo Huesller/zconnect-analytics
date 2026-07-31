@@ -1,10 +1,11 @@
 {
   "project": "Z Connect",
-  "version": "12.10.0",
-  "release": "FUNIL-ATIVO-TAREFAS-RAPIDAS-E-HISTORICO",
-  "build": "2026-07-20",
+  "version": "12.10.2",
+  "release": "TAG-FORA-DO-PERFIL",
+  "build": "2026-07-31",
   "environment": "production",
   "notes": [
+    "Tag Fora do perfil remove automaticamente o cliente do funil ativo sem excluir cadastro ou histórico",
     "Classificação comercial de anotações atualizada",
     "Demanda não atendida manual integrada ao Cliente 360",
     "Identificação de produto por código ou descrição no snapshot do catálogo",
