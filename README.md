@@ -1,4 +1,4 @@
-# Z Connect Comercial 12.10.3
+# Z Connect Comercial 12.10.4
 
 Central comercial da Z Automotiva: CRM, Cliente 360, funil, tarefas, cotações, inteligência de produtos e integração com o catálogo online.
 
@@ -16,6 +16,11 @@ O gerador seguro `scripts/generate-multiuser-config.mjs` inclui os usuários `al
 
 - `almir` enxerga somente os dados do consultor `almir`.
 - `gabriel` enxerga os dados identificados como `gabriel` ou `gabriel-zatt`.
+
+## Versão 12.10.4
+
+- Exportação Excel da Carteira de clientes respeitando busca, etapa, recência, tag, funil, anotações e ordenação.
+- Lista Fora do funil exporta também o motivo da retirada e preserva os dados comerciais do cliente.
 
 ## Versão 12.10.3
 

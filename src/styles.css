@@ -1057,6 +1057,7 @@ input:focus {
 .crm-view-actions span { color: var(--muted); font-size: 9px; }
 .crm-primary-action, .secondary-button, .delete-client-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 38px; border: 1px solid #d7192d; padding: 0 14px; background: #d7192d; color: #fff; font-size: 9px; font-weight: 900; }
 .crm-secondary-action { display:inline-flex; align-items:center; justify-content:center; gap:7px; min-height:38px; border:1px solid #293a4b; padding:0 14px; background:#101923; color:#fff; font-size:9px; font-weight:900; }
+.crm-table-head-actions{display:flex;align-items:center;justify-content:flex-end;gap:12px}.crm-table-head-actions .crm-secondary-action:disabled{opacity:.45;cursor:not-allowed}@media(max-width:700px){.crm-table-head-actions{align-items:flex-end;flex-direction:column}}
 .secondary-button { border-color: var(--line-strong); background: #fff; color: var(--text); }
 .delete-client-button { margin-left: auto; border-color: #cfcac2; background: #fff; color: #9b1725; }
 .new-client-modal { width: min(920px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; background: #fff; box-shadow: 0 28px 70px rgba(0,0,0,.28); }

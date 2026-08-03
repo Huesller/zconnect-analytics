@@ -4701,11 +4701,31 @@ function ClientCrmTable({ rows = [], activities = [], onOpen }) {
     return (status === "all" || row.statusKey === status) && (health === "all" || commercialHealth(row).key === health) && (tag === "all" || rowTags.includes(tag)) && (funnel === "all" || (funnel === "out" ? row.statusKey === "out_of_funnel" : row.statusKey !== "out_of_funnel")) && (!notesOnly || noteKeys.has(row.companyKey)) && (!needle || row._search.includes(needle));
   }).sort((a, b) => sort === "recent" ? new Date(b.lastPurchaseAt || 0) - new Date(a.lastPurchaseAt || 0) : sort === "days_desc" ? purchaseDays(b) - purchaseDays(a) : sort === "total_desc" ? b.purchaseTotal - a.purchaseTotal : a.company.localeCompare(b.company, "pt-BR"));
 
+  function exportClients() {
+    const columns = [
+      { key: "code", label: "Código" }, { key: "company", label: "Cliente" }, { key: "taxId", label: "CPF/CNPJ" },
+      { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone / WhatsApp" }, { key: "email", label: "E-mail" },
+      { key: "city", label: "Cidade" }, { key: "state", label: "UF" }, { key: "owner", label: "Responsável" },
+      { key: "stage", label: "Etapa" }, { key: "exitReason", label: "Motivo da saída do funil" }, { key: "tags", label: "Tags" },
+      { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" },
+      { key: "purchaseTotal", label: "Total comprado" }, { key: "nextContact", label: "Próximo contato" }
+    ];
+    const exportRows = visibleRows.map((row) => ({
+      code: row.customerCode || "", company: row.company || "", taxId: row.taxId || "", contact: row.contactName || "",
+      phone: row.phone || "", email: row.email || "", city: row.city || "", state: row.state || "", owner: row.owner || "",
+      stage: row.status || "", exitReason: row.funnelExitReason || "", tags: parseClientTags(row.tags).join(", "),
+      lastPurchase: row.lastPurchaseAt ? dateOnly(row.lastPurchaseAt) : "", days: purchaseDays(row) || "", health: commercialHealth(row).label,
+      purchaseTotal: safeNumber(row.purchaseTotal), nextContact: row.nextContactAt ? dateOnly(row.nextContactAt) : ""
+    }));
+    const listName = funnel === "out" ? "Clientes fora do funil" : funnel === "in" ? "Clientes no funil" : "Carteira de clientes";
+    downloadBlob(buildExcelWorkbook([{ name: "Clientes", rows: tableRows(listName, columns, exportRows), autoFilterRow: 3, freezeRows: 3, columnWidths: [13, 34, 20, 22, 20, 28, 20, 8, 20, 20, 32, 36, 16, 16, 22, 18, 18] }]), `zconnect-${slugifyFilePart(listName)}-${fileDateStamp()}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  }
+
   return (
     <article className="panel crm-table-panel">
       <div className="panel-head">
         <div><h2><Building2 size={18}/> Carteira de clientes</h2><p>Clique em qualquer linha para abrir histórico, anotações e próximo contato.</p></div>
-        <span>{visibleRows.length} cliente(s)</span>
+        <div className="crm-table-head-actions"><span>{visibleRows.length} cliente(s)</span><button type="button" className="crm-secondary-action" onClick={exportClients} disabled={!visibleRows.length}><Download size={16}/> Exportar Excel</button></div>
       </div>
       <div className="table-tools">
         <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, contato, código interno, telefone ou tag"/></label>

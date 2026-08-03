@@ -40,3 +40,11 @@ test("anotações e relatórios aceitam filtros diários e por data", () => {
   assert.match(source, /isSamePeriod\(item\.createdAtRaw, "custom", periodStart, periodEnd\)/);
   assert.match(source, /const rows = visible\.map/);
 });
+
+test("carteira exporta exatamente a lista filtrada", () => {
+  assert.match(source, /function exportClients\(\)/);
+  assert.match(source, /const exportRows = visibleRows\.map/);
+  assert.match(source, /Clientes fora do funil/);
+  assert.match(source, /Motivo da saída do funil/);
+  assert.match(source, /Exportar Excel/);
+});
