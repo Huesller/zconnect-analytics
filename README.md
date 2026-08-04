@@ -1,4 +1,4 @@
-# Z Connect Comercial 12.10.4
+# Z Connect Comercial 12.10.5
 
 Central comercial da Z Automotiva: CRM, Cliente 360, funil, tarefas, cotações, inteligência de produtos e integração com o catálogo online.
 
@@ -16,6 +16,12 @@ O gerador seguro `scripts/generate-multiuser-config.mjs` inclui os usuários `al
 
 - `almir` enxerga somente os dados do consultor `almir`.
 - `gabriel` enxerga os dados identificados como `gabriel` ou `gabriel-zatt`.
+
+## Versão 12.10.5
+
+- Salvamento visual imediato de anotações, sem manter o formulário bloqueado durante a sincronização.
+- A opção `Não atendeu` aceita a informação em branco e registra automaticamente `Cliente não atendeu.`.
+- Se a sincronização falhar, o item provisório é removido e o erro é exibido ao usuário.
 
 ## Versão 12.10.4
 

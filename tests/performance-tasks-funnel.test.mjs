@@ -36,3 +36,11 @@ test("proxy reutiliza validações recentes sem retirar o escopo seguro", () => 
   assert.match(proxy, /UPSTREAM_READ_CACHE/);
   assert.match(proxy, /canWriteScopedRecord/);
 });
+
+test("anotação não atendeu aceita texto vazio e salva sem bloquear a interface", () => {
+  assert.match(main, /OPTIONAL_NOTE_TYPES = new Set\(\["not_answered"\]\)/);
+  assert.match(main, /not_answered: "Cliente não atendeu\."/);
+  assert.match(main, /required=\{!OPTIONAL_NOTE_TYPES\.has\(noteForm\.type\)\}/);
+  assert.match(main, /void request\.catch/);
+  assert.doesNotMatch(main, /disabled=\{busyAction === "note"\}/);
+});
