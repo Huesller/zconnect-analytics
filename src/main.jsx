@@ -131,7 +131,7 @@ import {
 } from "./shared/export/xlsx.js";
 
 import { sheetTitle, tableRows, rawEventRows, sortEventsDesc, resultLabel, eventHistoryRows, companyActivityRows } from "./modules/reports/engine/event-reports.js";
-import { buildCleanupCandidates, buildDuplicateCompanyGroups } from "./modules/admin-quality/engine/quality-engine.js";
+import { useAdminQuality } from "./modules/admin-quality/useAdminQuality.js";
 import { handleSelectiveCleanup as runSelectiveCleanup, handleMergeDuplicates as runMergeDuplicates, handleManualMerge as runManualMerge, handleCompanyDataDeletion as runCompanyDataDeletion } from "./modules/admin-quality/engine/admin-actions.js";
 import { consultantActivityRows, dormantCompanyRows, specialOfferRows } from "./modules/reports/engine/commercial-reports.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -417,13 +417,19 @@ function App() {
   const [selectedDemandProduct, setSelectedDemandProduct] = useState(null);
   const [isNewClientOpen, setIsNewClientOpen] = useState(false);
   const [isClientImportOpen, setIsClientImportOpen] = useState(false);
-  const [selectedCleanupKeys, setSelectedCleanupKeys] = useState([]);
   const [isCleaning, setIsCleaning] = useState(false);
   const [isSavingCrm, setIsSavingCrm] = useState(false);
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
   const [actionFilter, setActionFilter] = useState("all");
   const clientModalOpenRef = useRef(false);
+
+  const {
+    cleanupCandidates,
+    duplicateCompanyGroups,
+    selectedCleanupKeys,
+    setSelectedCleanupKeys
+  } = useAdminQuality(events);
 
   useEffect(() => { clientModalOpenRef.current = Boolean(selectedClient); }, [selectedClient]);
 
@@ -620,8 +626,6 @@ function App() {
   const filteredManualDemands = useMemo(() => crmDemands.filter((item) => (consultant === "all" || normalizeConsultant(item.owner) === consultant) && (company === "all" || normalizeCompany(item.companyName) === company)), [crmDemands, consultant, company]);
   const demandStockRows = useMemo(() => buildDemandStockRows(filtered, catalogHealth.products || [], filteredReservations, crmRows, filteredManualDemands), [filtered, catalogHealth.products, filteredReservations, crmRows, filteredManualDemands]);
   const alerts = useMemo(() => buildAlerts({ actionRows, tasks: normalizedTasks, reservationKpis, catalogHealth }), [actionRows, normalizedTasks, reservationKpis, catalogHealth]);
-  const cleanupCandidates = useMemo(() => buildCleanupCandidates(events), [events]);
-  const duplicateCompanyGroups = useMemo(() => buildDuplicateCompanyGroups(events), [events]);
   const companyAdminOptions = useMemo(() => buildCompanyAdminOptions(events, crmClients, reservations), [events, crmClients, reservations]);
 
   const searchRank = useMemo(() => countBy(allSearchEvents, (event) => event.query.toLowerCase()), [allSearchEvents]);
@@ -683,14 +687,6 @@ function App() {
   const lostActivities = useMemo(() => monthActivities.filter((item) => item.type === "lost"), [monthActivities]);
   const wonValue = useMemo(() => wonActivities.reduce((sum, item) => sum + item.valueNumber, 0), [wonActivities]);
   const monthlyTarget = safeNumber(crmSettings.monthlyTarget);
-
-  useEffect(() => {
-    const availableKeys = cleanupCandidates.map((item) => item.companyKey || "__empty__");
-    setSelectedCleanupKeys((current) => {
-      const retained = current.filter((key) => availableKeys.includes(key));
-      return retained.length ? retained : availableKeys;
-    });
-  }, [cleanupCandidates]);
 
   const funnel = [
     ["Acessos", kpis.pageViews],
@@ -2968,6 +2964,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
