@@ -22,6 +22,35 @@ import {
   normalizeCompany,
   safeNumber
 } from "./shared/normalization.js";
+import {
+  companyKey,
+  isAnonymousCompany,
+  cleanupReason,
+  duplicateCompanyKey
+} from "./shared/company-utils.js";
+import {
+  productFromEvent,
+  productCode,
+  productName,
+  productLabel,
+  productQuantity,
+  productValue,
+  quoteProducts,
+  quoteProductsSummary,
+  quoteItemsCount
+} from "./shared/product-utils.js";
+import { money } from "./shared/formatting.js";
+import {
+  startOfDay,
+  endOfDay,
+  localDateInput,
+  localDateTimeInput,
+  dateTime,
+  crmContactDate,
+  dateOnly,
+  timeOnly
+} from "./shared/dates.js";
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -268,45 +297,6 @@ const ACTIVE_CART_COLUMNS = [
 
 
 
-function isAnonymousCompany(value) {
-  const company = normalizeCompany(value).toLowerCase();
-  return company === "não identificado" ||
-    company === "nao identificado" ||
-    company === "empresa não informada" ||
-    company === "empresa nao informada" ||
-    company === "não informada" ||
-    company === "nao informada";
-}
-
-function companyKey(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function cleanupReason(value) {
-  const key = companyKey(value);
-  if (!key || ["nao identificado", "empresa nao informada", "nao informada", "anonimo", "visitante", "sem empresa"].includes(key)) {
-    return "Empresa não identificada";
-  }
-  if (key.split(" ").some((token) => /^(teste|testes|test|testing)\d*$/.test(token))) {
-    return "Nome de teste";
-  }
-  return "";
-}
-
-function duplicateCompanyKey(value) {
-  return companyKey(value)
-    .replace(/\b(ltda|eireli|mei|me|sa)\b/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function crmStatusLabel(status) {
   const labels = {
     new: "Novo interesse",
@@ -423,28 +413,6 @@ async function fetchActiveReservations() {
 
 
 
-function startOfDay(date) {
-  const value = new Date(date);
-  value.setHours(0, 0, 0, 0);
-  return value;
-}
-
-function endOfDay(date) {
-  const value = new Date(date);
-  value.setHours(23, 59, 59, 999);
-  return value;
-}
-
-function localDateInput(date = new Date()) {
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function localDateTimeInput(date = new Date()) {
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 function isSamePeriod(dateLike, selected, customStart = "", customEnd = "") {
   if (selected === "all") return true;
   const d = new Date(dateLike);
@@ -498,10 +466,6 @@ function countBy(items, keyFn, weightFn = () => 1) {
     map.set(key, (map.get(key) || 0) + safeNumber(weightFn(item) || 1));
   });
   return [...map.entries()].sort((a, b) => b[1] - a[1]);
-}
-
-function money(value) {
-  return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function cartFollowUpMessage(context = {}) {
@@ -583,98 +547,6 @@ function DatePickerField({ value, onChange, min, max, required = false }) {
     if (typeof input.showPicker === "function") input.showPicker();
   }
   return <span className="date-picker-field"><input ref={inputRef} type={includesTime ? "datetime-local" : "date"} value={value} min={min} max={max} required={required} onChange={(event) => onChange(event.target.value)}/><button type="button" onClick={openPicker} aria-label={includesTime ? "Abrir data e horário" : "Abrir calendário"}><CalendarDays size={16}/></button></span>;
-}
-
-function dateTime(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "-";
-  return d.toLocaleString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function crmContactDate(value) {
-  const text = String(value || "").trim();
-  if (!text) return null;
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T12:00:00`) : new Date(text);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function dateOnly(value) {
-  const date = crmContactDate(value);
-  if (!date) return "-";
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(value || ""))) {
-    return date.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
-  }
-  return date.toLocaleDateString("pt-BR");
-}
-
-function timeOnly(value) {
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "--:--";
-  return d.toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function productFromEvent(event) {
-  return {
-    productCode: event.productCode,
-    productName: event.productName,
-    brand: event.brand,
-    quantity: event.quantity || 1,
-    price: event.price,
-    total: event.total
-  };
-}
-
-function productCode(product) {
-  return String(product.productCode || product.code || product.codigo || product.sku || "").trim();
-}
-
-function productName(product) {
-  return String(product.productName || product.name || product.description || product.descricao || "").trim();
-}
-
-function productLabel(product) {
-  const code = productCode(product);
-  const name = productName(product);
-  return [code, name].filter(Boolean).join(" - ") || "Produto não informado";
-}
-
-function productQuantity(product, fallback = 1) {
-  return Math.max(1, safeNumber(product.quantity || product.quantidade || fallback || 1));
-}
-
-function productValue(product, event) {
-  const total = safeNumber(product.total || product.cartTotal || product.valorTotal);
-  if (total) return total;
-  const price = safeNumber(product.price || product.preco || event.price);
-  return price ? price * productQuantity(product, event.quantity || 1) : safeNumber(event.total || event.cartTotal);
-}
-
-function quoteProducts(event) {
-  const products = event.products.length ? event.products : [productFromEvent(event)];
-  return products.filter((product) => productLabel(product) !== "Produto não informado");
-}
-
-function quoteProductsSummary(event) {
-  const labels = quoteProducts(event).map(productLabel);
-  if (!labels.length) return "Produtos não informados";
-  if (labels.length <= 2) return labels.join("; ");
-  return `${labels.slice(0, 2).join("; ")} +${labels.length - 2} produtos`;
-}
-
-function quoteItemsCount(event) {
-  if (event.itemsCount) return event.itemsCount;
-  const products = quoteProducts(event);
-  if (!products.length) return event.quantity || 0;
-  return products.reduce((sum, product) => sum + productQuantity(product, 1), 0);
 }
 
 function buildCartFollowUpContext(events = []) {
