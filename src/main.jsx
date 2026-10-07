@@ -1,5 +1,6 @@
 import LoginScreen from "./core/auth/LoginScreen.jsx";
 import { useAuth } from "./core/auth/useAuth.js";
+import { useAppData } from "./core/app/useAppData.js";
 import CurrencyInput from "./shared/components/CurrencyInput.jsx";
 import DatePickerField from "./shared/components/DatePickerField.jsx";
 import { whatsappPhone } from "./shared/contact.js";
@@ -426,46 +427,26 @@ function App() {
   useEffect(() => { clientModalOpenRef.current = Boolean(selectedClient); }, [selectedClient]);
 
 
-  async function load(options = {}) {
-    const silent = options?.silent === true;
-    if (!silent) setStatus("Carregando eventos reais...");
-    setIsLoading(true);
-    try {
-      const [data, activeReservations, savedCrmClients, savedTasks, savedActivities, savedSettings, savedCatalogHealth, savedQuotes, savedDemands] = await Promise.all([
-        fetchEvents(),
-        fetchActiveReservations().catch(() => []),
-        fetchCrmClients().catch(() => []),
-        fetchCrmTasks().catch(() => []),
-        fetchCrmActivities().catch(() => []),
-        fetchCrmSettings().catch(() => ({})),
-        fetchCatalogHealth().catch(() => ({ snapshots: [], products: [], latest: null })),
-        fetchCrmQuotes().catch(() => ({ quotes: [], items: [] })),
-        fetchCrmDemands().catch(() => [])
-      ]);
-      setEvents(data);
-      setReservations(activeReservations);
-      setCrmClients(savedCrmClients);
-      setCrmTasks((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedTasks, current, ["taskId", "id"]) : savedTasks);
-      setCrmActivities((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedActivities, current, ["activityId", "id"]) : savedActivities);
-      setCrmSettings(savedSettings);
-      setCatalogHealth(savedCatalogHealth);
-      setCrmQuotes(savedQuotes.quotes || []);
-      setCrmQuoteItems(savedQuotes.items || []);
-      setCrmDemands((current) => clientModalOpenRef.current ? mergeLocalCrmRows(savedDemands, current, ["demandId", "id"]) : savedDemands);
-      setLastUpdatedAt(new Date());
-      const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
-      setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
-    } catch (error) {
-      if (error.message === "unauthorized") invalidate();
-      setEvents([]);
-      setReservations([]);
-      setCrmClients([]);
-      setStatus(error.message || "Não consegui carregar os eventos.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
+  const { load } = useAppData({
+    clientModalOpenRef,
+    mergeLocalCrmRows,
+    fetchCatalogHealth,
+    invalidate,
+    emptyPeriodMessage: EMPTY_PERIOD_MESSAGE,
+    setEvents,
+    setReservations,
+    setCrmClients,
+    setCrmTasks,
+    setCrmActivities,
+    setCrmSettings,
+    setCatalogHealth,
+    setCrmQuotes,
+    setCrmQuoteItems,
+    setCrmDemands,
+    setLastUpdatedAt,
+    setStatus,
+    setIsLoading
+  });
   function showToast(message, type = "success") {
     setToast({ id: Date.now(), message, type });
   }
@@ -2988,6 +2969,8 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
 
 
 
