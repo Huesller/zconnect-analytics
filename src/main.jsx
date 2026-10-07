@@ -1,3 +1,4 @@
+import { countBy } from "./shared/collections.js";
 import {
   fetchEvents,
   fetchAnalyticsAction,
@@ -373,16 +374,6 @@ const ACTIVE_CART_COLUMNS = [
 function percent(value) {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
-}
-
-function countBy(items, keyFn, weightFn = () => 1) {
-  const map = new Map();
-  items.forEach((item) => {
-    const key = String(keyFn(item) || "").trim();
-    if (!key) return;
-    map.set(key, (map.get(key) || 0) + safeNumber(weightFn(item) || 1));
-  });
-  return [...map.entries()].sort((a, b) => b[1] - a[1]);
 }
 
 function cartFollowUpMessage(context = {}) {
@@ -3169,6 +3160,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
