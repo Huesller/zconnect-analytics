@@ -1,3 +1,5 @@
+import CurrencyInput from "./shared/components/CurrencyInput.jsx";
+import DatePickerField from "./shared/components/DatePickerField.jsx";
 import { whatsappPhone } from "./shared/contact.js";
 import { copyTextToClipboard } from "./shared/browser.js";
 import { cartFollowUpMessage, stockRestockMessage } from "./modules/commercial-intelligence/engine/commercial-messages.js";
@@ -373,39 +375,6 @@ const ACTIVE_CART_COLUMNS = [
 
 
 
-
-function CurrencyInput({ value, onChange, placeholder = "R$ 0,00", ...props }) {
-  const [display, setDisplay] = useState(value === "" || value === null || value === undefined ? "" : money(safeNumber(value)));
-  const lastEmittedRef = useRef(null);
-  useEffect(() => {
-    if (String(value ?? "") === lastEmittedRef.current) return;
-    setDisplay(value === "" || value === null || value === undefined ? "" : money(safeNumber(value)));
-  }, [value]);
-  return <input {...props} inputMode="decimal" value={display} placeholder={placeholder} onFocus={(event) => event.currentTarget.select()} onChange={(event) => {
-    const raw = event.target.value;
-    setDisplay(raw);
-    lastEmittedRef.current = raw;
-    onChange?.(raw);
-  }} onBlur={() => {
-    const numeric = safeNumber(display);
-    const formatted = display.trim() ? money(numeric) : "";
-    setDisplay(formatted);
-    lastEmittedRef.current = display.trim() ? String(numeric) : "";
-    onChange?.(display.trim() ? String(numeric) : "");
-  }}/>;
-}
-
-function DatePickerField({ value, onChange, min, max, required = false }) {
-  const inputRef = useRef(null);
-  const includesTime = String(value || "").includes("T");
-  function openPicker() {
-    const input = inputRef.current;
-    if (!input) return;
-    input.focus();
-    if (typeof input.showPicker === "function") input.showPicker();
-  }
-  return <span className="date-picker-field"><input ref={inputRef} type={includesTime ? "datetime-local" : "date"} value={value} min={min} max={max} required={required} onChange={(event) => onChange(event.target.value)}/><button type="button" onClick={openPicker} aria-label={includesTime ? "Abrir data e horário" : "Abrir calendário"}><CalendarDays size={16}/></button></span>;
-}
 
 const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success", "quote_sent", "negotiation_note", "after_sales_note", "contact_return", "not_answered", "call_completed", "missing_stock", "high_price", "no_return", "sale_completed_note"];
 
@@ -3110,6 +3079,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
