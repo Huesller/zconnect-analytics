@@ -1,5 +1,5 @@
 import LoginScreen from "./core/auth/LoginScreen.jsx";
-import { fetchSession } from "./core/auth/session-client.js";
+import { useAuth } from "./core/auth/useAuth.js";
 import CurrencyInput from "./shared/components/CurrencyInput.jsx";
 import DatePickerField from "./shared/components/DatePickerField.jsx";
 import { whatsappPhone } from "./shared/contact.js";
@@ -381,8 +381,7 @@ const ACTIVE_CART_COLUMNS = [
 const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success", "quote_sent", "negotiation_note", "after_sales_note", "contact_return", "not_answered", "call_completed", "missing_stock", "high_price", "no_return", "sale_completed_note"];
 
 function App() {
-  const [authStatus, setAuthStatus] = useState("checking");
-  const [authProfile, setAuthProfile] = useState({ username: "", displayName: "", role: "", consultants: [] });
+  const { authStatus, authProfile, login, logout, invalidate } = useAuth();
   const [events, setEvents] = useState([]);
   const [reservations, setReservations] = useState([]);
   const [crmClients, setCrmClients] = useState([]);
@@ -426,33 +425,6 @@ function App() {
 
   useEffect(() => { clientModalOpenRef.current = Boolean(selectedClient); }, [selectedClient]);
 
-  useEffect(() => {
-    let active = true;
-
-    fetchSession()
-      .then((session) => {
-        if (!active) return;
-
-        if (session.authenticated) {
-          setAuthProfile(session.profile || {
-            username: session.user || "admin",
-            displayName: session.user || "Administrador",
-            role: "admin",
-            consultants: ["*"]
-          });
-          setAuthStatus("authenticated");
-        } else {
-          setAuthStatus("anonymous");
-        }
-      })
-      .catch(() => {
-        if (active) setAuthStatus("anonymous");
-      });
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   async function load(options = {}) {
     const silent = options?.silent === true;
@@ -484,7 +456,7 @@ function App() {
       const activeCarts = new Set(activeReservations.map((item) => item.sessionId)).size;
       setStatus(data.length || activeCarts ? `${data.length} eventos · ${activeCarts} carrinho(s) ativo(s)` : EMPTY_PERIOD_MESSAGE);
     } catch (error) {
-      if (error.message === "unauthorized") setAuthStatus("anonymous");
+      if (error.message === "unauthorized") invalidate();
       setEvents([]);
       setReservations([]);
       setCrmClients([]);
@@ -1424,9 +1396,7 @@ function App() {
   }
 
   async function handleLogout() {
-    await fetch("/api/logout", { method: "POST" }).catch(() => null);
-    setAuthStatus("anonymous");
-    setAuthProfile({ username: "", displayName: "", role: "", consultants: [] });
+    await logout();
     setEvents([]);
     setStatus("Sessão encerrada.");
   }
@@ -1479,7 +1449,7 @@ function App() {
   }
 
   if (authStatus !== "authenticated") {
-    return <LoginScreen onLogin={(profile) => { setAuthProfile(profile); setAuthStatus("authenticated"); }} />;
+    return <LoginScreen onLogin={login} />;
   }
 
   const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");

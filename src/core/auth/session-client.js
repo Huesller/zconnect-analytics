@@ -21,6 +21,13 @@ async function fetchSession() {
   };
 }
 
+async function logoutSession() {
+  await fetch("/api/logout", {
+    method: "POST"
+  }).catch(() => null);
+}
+
 export {
-  fetchSession
+  fetchSession,
+  logoutSession
 };
