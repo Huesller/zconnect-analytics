@@ -1,6 +1,7 @@
 import LoginScreen from "./core/auth/LoginScreen.jsx";
 import { useAuth } from "./core/auth/useAuth.js";
 import { useAppData } from "./core/app/useAppData.js";
+import { useAppRefresh } from "./core/app/useAppRefresh.js";
 import CurrencyInput from "./shared/components/CurrencyInput.jsx";
 import DatePickerField from "./shared/components/DatePickerField.jsx";
 import { whatsappPhone } from "./shared/contact.js";
@@ -451,13 +452,11 @@ function App() {
     setToast({ id: Date.now(), message, type });
   }
 
-  useEffect(() => {
-    if (authStatus !== "authenticated") return undefined;
-
-    load();
-    const timer = window.setInterval(() => { if (!clientModalOpenRef.current) load({ silent: true }); }, 30000);
-    return () => window.clearInterval(timer);
-  }, [authStatus]);
+  useAppRefresh({
+    authStatus,
+    load,
+    clientModalOpenRef
+  });
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -2969,6 +2968,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
