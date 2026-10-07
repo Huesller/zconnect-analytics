@@ -1,3 +1,5 @@
+import { whatsappPhone } from "./shared/contact.js";
+import { copyTextToClipboard } from "./shared/browser.js";
 import { cartFollowUpMessage, stockRestockMessage } from "./modules/commercial-intelligence/engine/commercial-messages.js";
 import { countBy } from "./shared/collections.js";
 import {
@@ -375,26 +377,6 @@ const ACTIVE_CART_COLUMNS = [
 function percent(value) {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
-}
-
-function whatsappPhone(value) {
-  const digits = String(value || "").replace(/\D/g, "");
-  return digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
-}
-
-async function copyTextToClipboard(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand("copy");
-  textarea.remove();
 }
 
 function CurrencyInput({ value, onChange, placeholder = "R$ 0,00", ...props }) {
@@ -3133,6 +3115,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
