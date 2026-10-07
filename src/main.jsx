@@ -5,6 +5,14 @@ import {
   postAnalyticsActionWithRetry
 } from "./core/api/analytics-client.js";
 import {
+  fetchCrmClients,
+  fetchCrmTasks,
+  fetchCrmActivities,
+  fetchCrmSettings,
+  fetchCrmQuotes,
+  fetchCrmDemands
+} from "./core/api/crm-client.js";
+import {
   normalizeEvent,
   normalizeObjectEvent,
   normalizeArrayEvent
@@ -414,69 +422,6 @@ async function fetchActiveReservations() {
 
 
 
-
-async function fetchCrmClients() {
-  const data = await fetchAnalyticsAction("crm_clients");
-  return (Array.isArray(data.clients) ? data.clients : []).map((client) => ({
-    ...client,
-    companyKey: String(client.companyKey || ""),
-    companyName: normalizeCompany(client.companyName),
-    taxId: String(client.taxId || ""),
-    phone: String(client.phone || ""),
-    status: String(client.status || "new"),
-    owner: String(client.owner || ""),
-    state: String(client.state || ""),
-    address: String(client.address || ""),
-    route: String(client.route || ""),
-    daysWithoutPurchase: safeNumber(client.daysWithoutPurchase),
-    nextContactAt: String(client.nextContactAt || ""),
-    tags: String(client.tags || ""),
-    funnelExitReason: String(client.funnelExitReason || ""),
-    funnelExitAt: String(client.funnelExitAt || ""),
-    notes: String(client.notes || ""),
-    expectedValue: safeNumber(client.expectedValue),
-    lastOutcome: String(client.lastOutcome || ""),
-    lostReason: String(client.lostReason || "")
-  }));
-}
-
-async function fetchCrmTasks() {
-  const data = await fetchAnalyticsAction("crm_tasks");
-  return Array.isArray(data.tasks) ? data.tasks : [];
-}
-
-async function fetchCrmActivities() {
-  const data = await fetchAnalyticsAction("crm_activities");
-  return Array.isArray(data.activities) ? data.activities : [];
-}
-
-async function fetchCrmSettings() {
-  const data = await fetchAnalyticsAction("crm_settings");
-  return data.settings && typeof data.settings === "object" ? data.settings : {};
-}
-async function fetchCrmQuotes() { return fetchAnalyticsAction("crm_quotes"); }
-async function fetchCrmDemands() {
-  const data = await fetchAnalyticsAction("crm_demands");
-  return Array.isArray(data.demands) ? data.demands : [];
-}
-
-async function fetchCatalogHealth() {
-  const data = await fetchAnalyticsAction("catalog_health");
-  return {
-    snapshots: Array.isArray(data.snapshots) ? data.snapshots : [],
-    products: Array.isArray(data.products) ? data.products : [],
-    latest: data.latest || null
-  };
-}
-
-async function fetchCleanupCandidates() {
-  const data = await fetchAnalyticsAction("cleanup_candidates");
-  return Array.isArray(data.candidates) ? data.candidates : [];
-}
-
-async function clearEvents(pin) {
-  return postAnalyticsAction("clear_events", { pin });
-}
 
 function startOfDay(date) {
   const value = new Date(date);
@@ -5183,4 +5128,5 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
