@@ -118,6 +118,7 @@ import {
 } from "./shared/export/xlsx.js";
 
 import { sheetTitle, tableRows, rawEventRows, sortEventsDesc, resultLabel, eventHistoryRows, companyActivityRows } from "./modules/reports/engine/event-reports.js";
+import { buildCleanupCandidates, buildDuplicateCompanyGroups } from "./modules/admin-quality/engine/quality-engine.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -716,49 +717,6 @@ function slugifyFilePart(value) {
 }
 
 const NOTE_ACTIVITY_TYPES = ["note", "contact_note", "call_no_answer", "whatsapp_sent", "email_sent", "invalid_phone", "contact_success", "quote_sent", "negotiation_note", "after_sales_note", "contact_return", "not_answered", "call_completed", "missing_stock", "high_price", "no_return", "sale_completed_note"];
-
-function buildCleanupCandidates(events) {
-  const map = new Map();
-  events.forEach((event) => {
-    const rawName = String(event.companyRaw ?? event.companyName ?? "").trim();
-    const name = normalizeCompany(rawName);
-    const reason = cleanupReason(rawName);
-    if (!reason) return;
-    const key = companyKey(rawName);
-    const mapKey = key || "__empty__";
-    if (!map.has(mapKey)) map.set(mapKey, { companyKey: key, companyName: name, reason, eventCount: 0, firstAt: "", lastAt: "" });
-    const item = map.get(mapKey);
-    item.eventCount++;
-    if (!item.firstAt || new Date(event.timestamp) < new Date(item.firstAt)) item.firstAt = event.timestamp;
-    if (!item.lastAt || new Date(event.timestamp) > new Date(item.lastAt)) item.lastAt = event.timestamp;
-  });
-  return [...map.values()].sort((a, b) => b.eventCount - a.eventCount);
-}
-
-function buildDuplicateCompanyGroups(events) {
-  const names = new Map();
-  events.forEach((event) => {
-    const name = normalizeCompany(event.companyName);
-    if (cleanupReason(name)) return;
-    if (!names.has(name)) names.set(name, 0);
-    names.set(name, names.get(name) + 1);
-  });
-  const groups = new Map();
-  names.forEach((count, name) => {
-    const key = duplicateCompanyKey(name);
-    if (!key) return;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ name, count, companyKey: companyKey(name) });
-  });
-  return [...groups.entries()].map(([key, variants]) => {
-    const sortedVariants = variants.sort((a, b) => b.count - a.count);
-    return {
-      key,
-      variants: sortedVariants,
-      targetName: sortedVariants[0]?.name || ""
-    };
-  }).filter((group) => group.variants.length > 1);
-}
 
 function consultantActivityRows(events) {
   const map = new Map();
@@ -3733,6 +3691,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
