@@ -1,4 +1,5 @@
 import LoginScreen from "./core/auth/LoginScreen.jsx";
+import { fetchSession } from "./core/auth/session-client.js";
 import CurrencyInput from "./shared/components/CurrencyInput.jsx";
 import DatePickerField from "./shared/components/DatePickerField.jsx";
 import { whatsappPhone } from "./shared/contact.js";
@@ -427,19 +428,30 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/session", { cache: "no-store" })
-      .then(async (response) => ({ response, data: await response.json().catch(() => ({})) }))
-      .then(({ response, data }) => {
+
+    fetchSession()
+      .then((session) => {
         if (!active) return;
-        if (response.ok && data.authenticated) {
-          setAuthProfile(data.profile || { username: data.user || "admin", displayName: data.user || "Administrador", role: "admin", consultants: ["*"] });
+
+        if (session.authenticated) {
+          setAuthProfile(session.profile || {
+            username: session.user || "admin",
+            displayName: session.user || "Administrador",
+            role: "admin",
+            consultants: ["*"]
+          });
           setAuthStatus("authenticated");
         } else {
           setAuthStatus("anonymous");
         }
       })
-      .catch(() => { if (active) setAuthStatus("anonymous"); });
-    return () => { active = false; };
+      .catch(() => {
+        if (active) setAuthStatus("anonymous");
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   async function load(options = {}) {
