@@ -23,6 +23,14 @@ async function fetchEvents() {
   }
 }
 
+async function fetchCatalogHealth() {
+  const data = await fetchAnalyticsAction("catalog_health");
+  return {
+    snapshots: Array.isArray(data.snapshots) ? data.snapshots : [],
+    products: Array.isArray(data.products) ? data.products : [],
+    latest: data.latest || null
+  };
+}
 async function fetchAnalyticsAction(action) {
   const url = `${ANALYTICS_API_URL}?action=${encodeURIComponent(action)}&cache=${Date.now()}`;
   const response = await fetch(url, { method: "GET", cache: "no-store" });
@@ -75,8 +83,11 @@ async function postAnalyticsActionWithRetry(action, payload = {}, options = {}) 
 
 export {
   fetchEvents,
+  fetchCatalogHealth,
   fetchAnalyticsAction,
   postAnalyticsAction,
   waitForRetry,
   postAnalyticsActionWithRetry
 };
+
+
