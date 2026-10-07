@@ -1,3 +1,5 @@
+import { safeNumber } from "./normalization.js";
+
 function countBy(items, keyFn, weightFn = () => 1) {
   const map = new Map();
   items.forEach((item) => {
@@ -11,3 +13,6 @@ function countBy(items, keyFn, weightFn = () => 1) {
 export {
   countBy
 };
+
+
+
