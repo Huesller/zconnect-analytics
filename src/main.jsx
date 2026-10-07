@@ -10,6 +10,7 @@ import { cartFollowUpMessage, stockRestockMessage } from "./modules/commercial-i
 import { countBy } from "./shared/collections.js";
 import {
   fetchEvents,
+  fetchCatalogHealth,
   fetchAnalyticsAction,
   postAnalyticsAction,
   postAnalyticsActionWithRetry,
@@ -2678,6 +2679,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
