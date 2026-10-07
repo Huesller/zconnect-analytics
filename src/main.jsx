@@ -45,7 +45,7 @@ import {
   quoteProductsSummary,
   quoteItemsCount,
 } from "./shared/product-utils.js";
-import { money } from "./shared/formatting.js";
+import { money, percent } from "./shared/formatting.js";
 import {
   startOfDay,
   endOfDay,
@@ -373,11 +373,6 @@ const ACTIVE_CART_COLUMNS = [
 
 
 
-
-function percent(value) {
-  if (!Number.isFinite(value)) return "0%";
-  return `${Math.round(value * 100)}%`;
-}
 
 function CurrencyInput({ value, onChange, placeholder = "R$ 0,00", ...props }) {
   const [display, setDisplay] = useState(value === "" || value === null || value === undefined ? "" : money(safeNumber(value)));
@@ -3115,6 +3110,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
