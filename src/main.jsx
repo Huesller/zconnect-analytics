@@ -2,32 +2,33 @@ import {
   fetchEvents,
   fetchAnalyticsAction,
   postAnalyticsAction,
-  postAnalyticsActionWithRetry
+  postAnalyticsActionWithRetry,
 } from "./core/api/analytics-client.js";
+import { reservationExpiryLabel, normalizeReservation, fetchActiveReservations } from "./core/api/reservation-client.js";
 import {
   fetchCrmClients,
   fetchCrmTasks,
   fetchCrmActivities,
   fetchCrmSettings,
   fetchCrmQuotes,
-  fetchCrmDemands
+  fetchCrmDemands,
 } from "./core/api/crm-client.js";
 import {
   normalizeEvent,
   normalizeObjectEvent,
-  normalizeArrayEvent
+  normalizeArrayEvent,
 } from "./core/events/event-core.js";
 import {
   normalizeConsultant,
   normalizeCompany,
-  safeNumber
+  safeNumber,
 } from "./shared/normalization.js";
 import { dateGroupKey, dateGroupLabel, groupItemsByDate, eventDetail, productRank, quotedProductRows, noResultDemandRows, periodLabel, fileDateStamp, slugifyFilePart } from "./shared/report-utils.js";
 import {
   companyKey,
   isAnonymousCompany,
   cleanupReason,
-  duplicateCompanyKey
+  duplicateCompanyKey,
 } from "./shared/company-utils.js";
 import {
   productFromEvent,
@@ -38,7 +39,7 @@ import {
   productValue,
   quoteProducts,
   quoteProductsSummary,
-  quoteItemsCount
+  quoteItemsCount,
 } from "./shared/product-utils.js";
 import { money } from "./shared/formatting.js";
 import {
@@ -49,7 +50,8 @@ import {
   dateTime,
   crmContactDate,
   dateOnly,
-  timeOnly
+  timeOnly,
+  isSamePeriod,
 } from "./shared/dates.js";
 
 import {
@@ -371,109 +373,6 @@ const ACTIVE_CART_COLUMNS = [
 function percent(value) {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(value * 100)}%`;
-}
-
-function reservationExpiryLabel(value) {
-  const expiresAt = new Date(value);
-  if (Number.isNaN(expiresAt.getTime())) return "-";
-  const minutes = Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 60000));
-  if (minutes < 1) return "agora";
-  if (minutes < 60) return `em ${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
-  return remainder ? `em ${hours}h ${remainder}min` : `em ${hours}h`;
-}
-
-function normalizeReservation(row, index) {
-  const statusKey = String(row?.status || "active").toLowerCase();
-  const company = normalizeCompany(row?.companyName);
-  const consultant = normalizeConsultant(row?.consultant).toUpperCase();
-  const productCode = String(row?.productCode || "").trim();
-  const productName = String(row?.productName || "").trim();
-  const requestedNumber = safeNumber(row?.requestedQty);
-  const reservedNumber = safeNumber(row?.reservedQty);
-  const excessNumber = safeNumber(row?.excessQty);
-  const formatted = {
-    id: row?.id || `reservation-${index}`,
-    sessionId: String(row?.sessionId || ""),
-    company,
-    consultant,
-    product: [productCode, productName].filter(Boolean).join(" · ") || "Produto não informado",
-    requested: requestedNumber,
-    reserved: reservedNumber,
-    excess: excessNumber || "-",
-    requestedNumber,
-    reservedNumber,
-    excessNumber,
-    stockQty: safeNumber(row?.stockQty),
-    statusKey,
-    status: statusKey === "quoted" ? "Cotação enviada" : "No carrinho",
-    expires: reservationExpiryLabel(row?.expiresAt),
-    expiresAtRaw: row?.expiresAt || "",
-    updatedAtRaw: row?.updatedAt || row?.createdAt || "",
-    updatedAt: dateTime(row?.updatedAt || row?.createdAt),
-    productCode,
-    productName
-  };
-  formatted._search = [formatted.company, formatted.consultant, formatted.product, formatted.status]
-    .join(" ")
-    .toLowerCase();
-  return formatted;
-}
-
-async function fetchActiveReservations() {
-  const data = await fetchAnalyticsAction("reservations_admin");
-  const rows = Array.isArray(data?.reservations) ? data.reservations : [];
-  return rows.map(normalizeReservation);
-}
-
-
-
-
-
-function isSamePeriod(dateLike, selected, customStart = "", customEnd = "") {
-  if (selected === "all") return true;
-  const d = new Date(dateLike);
-  const now = new Date();
-  if (Number.isNaN(d.getTime())) return false;
-  if (selected === "today") return d.toDateString() === now.toDateString();
-
-  if (selected === "yesterday") {
-    const yesterday = new Date(now);
-    yesterday.setDate(now.getDate() - 1);
-    return d.toDateString() === yesterday.toDateString();
-  }
-
-  if (selected === "week") {
-    const start = startOfDay(now);
-    const weekday = (start.getDay() + 6) % 7;
-    start.setDate(start.getDate() - weekday);
-    return d >= start && d <= now;
-  }
-
-  if (selected === "month") {
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
-    return d >= start && d <= now;
-  }
-
-  if (selected === "last_month") {
-    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
-    return d >= start && d <= end;
-  }
-
-  if (selected === "custom") {
-    const start = customStart ? startOfDay(`${customStart}T00:00:00`) : null;
-    const end = customEnd ? endOfDay(`${customEnd}T00:00:00`) : null;
-    if (start && d < start) return false;
-    if (end && d > end) return false;
-    return Boolean(start || end);
-  }
-
-  const days = selected === "7d" ? 7 : 30;
-  const cutoff = new Date(now);
-  cutoff.setDate(now.getDate() - days);
-  return d >= cutoff;
 }
 
 function countBy(items, keyFn, weightFn = () => 1) {
@@ -3270,6 +3169,9 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
+
 
 
 

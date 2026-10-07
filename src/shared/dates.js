@@ -77,6 +77,51 @@ function timeOnly(value) {
   });
 }
 
+function isSamePeriod(dateLike, selected, customStart = "", customEnd = "") {
+  if (selected === "all") return true;
+  const d = new Date(dateLike);
+  const now = new Date();
+  if (Number.isNaN(d.getTime())) return false;
+  if (selected === "today") return d.toDateString() === now.toDateString();
+
+  if (selected === "yesterday") {
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    return d.toDateString() === yesterday.toDateString();
+  }
+
+  if (selected === "week") {
+    const start = startOfDay(now);
+    const weekday = (start.getDay() + 6) % 7;
+    start.setDate(start.getDate() - weekday);
+    return d >= start && d <= now;
+  }
+
+  if (selected === "month") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return d >= start && d <= now;
+  }
+
+  if (selected === "last_month") {
+    const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    return d >= start && d <= end;
+  }
+
+  if (selected === "custom") {
+    const start = customStart ? startOfDay(`${customStart}T00:00:00`) : null;
+    const end = customEnd ? endOfDay(`${customEnd}T00:00:00`) : null;
+    if (start && d < start) return false;
+    if (end && d > end) return false;
+    return Boolean(start || end);
+  }
+
+  const days = selected === "7d" ? 7 : 30;
+  const cutoff = new Date(now);
+  cutoff.setDate(now.getDate() - days);
+  return d >= cutoff;
+}
+
 export {
   startOfDay,
   endOfDay,
@@ -85,5 +130,7 @@ export {
   dateTime,
   crmContactDate,
   dateOnly,
-  timeOnly
+  timeOnly,
+  isSamePeriod,
 };
+
