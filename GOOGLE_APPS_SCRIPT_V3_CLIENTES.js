@@ -1,3 +1,18 @@
+const USERS_SHEET = "USERS";
+
+const USER_HEADERS = [
+  "username",
+  "displayName",
+  "role",
+  "consultants",
+  "passwordHash",
+  "active",
+  "createdAt",
+  "updatedAt"
+];
+function getUsersSheet_() {
+  return getStructuredSheet_(USERS_SHEET, USER_HEADERS);
+}
 const EVENTS_SHEET = "EVENTS";
 const OFFERS_SHEET = "OFFERS";
 const RESERVATIONS_SHEET = "RESERVATIONS";
@@ -1192,6 +1207,236 @@ function readStructuredRows_(sheet, idPrefix) {
     return item;
   });
 }
+function normalizeUserUsername_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "")
+    .slice(0, 80);
+}
+
+function normalizeUserRole_(value) {
+  const role = String(value || "").trim().toLowerCase();
+
+  if (role === "admin" || role === "adm") return "admin";
+  if (role === "gestor" || role === "manager") return "gestor";
+  return "consultor";
+}
+
+function normalizeUserConsultants_(value, username) {
+  let values = Array.isArray(value)
+    ? value
+    : String(value || "")
+        .split(",")
+        .map(function(item) { return item.trim(); });
+
+  values = values
+    .map(normalizeUserUsername_)
+    .filter(Boolean);
+
+  if (!values.length && username) values = [username];
+
+  return [...new Set(values)];
+}
+
+function userPublic_(row) {
+  return {
+    username: normalizeUserUsername_(row.username),
+    displayName: String(row.displayName || row.username || "Usuário").trim(),
+    role: normalizeUserRole_(row.role),
+    consultants: normalizeUserConsultants_(row.consultants, row.username),
+    active: row.active !== false && String(row.active).toLowerCase() !== "false",
+    createdAt: row.createdAt || "",
+    updatedAt: row.updatedAt || ""
+  };
+}
+
+function readUsers_() {
+  const sheet = getUsersSheet_();
+  const rows = readStructuredRows_(sheet, "USR");
+
+  return {
+    ok: true,
+    users: rows
+      .filter(function(row) {
+        return normalizeUserUsername_(row.username);
+      })
+      .map(userPublic_)
+  };
+}
+
+function findUserRow_(sheet, username) {
+  const target = normalizeUserUsername_(username);
+  if (!target) return null;
+
+  const values = sheet.getDataRange().getValues();
+  if (!values.length) return null;
+
+  const headers = values[0].map(String);
+  const usernameColumn = headers.indexOf("username");
+
+  if (usernameColumn < 0) return null;
+
+  for (let index = 1; index < values.length; index += 1) {
+    const current = normalizeUserUsername_(values[index][usernameColumn]);
+
+    if (current === target) {
+      return {
+        rowNumber: index + 1,
+        headers: headers,
+        values: values[index]
+      };
+    }
+  }
+
+  return null;
+}
+
+function upsertUser_(data) {
+  if (!validateAdminAccess_(data)) {
+    return { ok: false, error: "unauthorized" };
+  }
+
+  const username = normalizeUserUsername_(data.username);
+  const displayName = String(data.displayName || username).trim().slice(0, 120);
+  const role = normalizeUserRole_(data.role);
+  const consultants = normalizeUserConsultants_(data.consultants, username);
+  const passwordHash = String(data.passwordHash || "").trim();
+
+  if (!username) return { ok: false, error: "invalid_username" };
+  if (!displayName) return { ok: false, error: "invalid_display_name" };
+  if (!passwordHash) return { ok: false, error: "password_hash_required" };
+
+  const sheet = getUsersSheet_();
+  const existing = findUserRow_(sheet, username);
+  const now = new Date();
+
+  if (existing) {
+    const row = {};
+    existing.headers.forEach(function(header, index) {
+      row[header] = existing.values[index];
+    });
+
+    const currentRole = normalizeUserRole_(row.role);
+
+    if (currentRole !== "consultor" && role !== currentRole) {
+      return { ok: false, error: "protected_user_role" };
+    }
+
+    const normalized = {
+      username: username,
+      displayName: displayName,
+      role: role,
+      consultants: consultants.join(","),
+      passwordHash: passwordHash,
+      active: data.active === false ? false : true,
+      createdAt: row.createdAt || now,
+      updatedAt: now
+    };
+
+    sheet.getRange(
+      existing.rowNumber,
+      1,
+      1,
+      existing.headers.length
+    ).setValues([
+      existing.headers.map(function(header) {
+        return normalized[header] !== undefined
+          ? normalized[header]
+          : row[header] || "";
+      })
+    ]);
+
+    return {
+      ok: true,
+      user: userPublic_(normalized),
+      updated: true
+    };
+  }
+
+  const normalized = {
+    username: username,
+    displayName: displayName,
+    role: role,
+    consultants: consultants.join(","),
+    passwordHash: passwordHash,
+    active: data.active === false ? false : true,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const headers = getHeaders_(sheet);
+
+  sheet.appendRow(
+    headers.map(function(header) {
+      return normalized[header] !== undefined
+        ? normalized[header]
+        : "";
+    })
+  );
+
+  return {
+    ok: true,
+    user: userPublic_(normalized),
+    created: true
+  };
+}
+
+function updateUserStatus_(data) {
+  if (!validateAdminAccess_(data)) {
+    return { ok: false, error: "unauthorized" };
+  }
+
+  const username = normalizeUserUsername_(data.username);
+  const sheet = getUsersSheet_();
+  const existing = findUserRow_(sheet, username);
+
+  if (!existing) {
+    return { ok: false, error: "user_not_found" };
+  }
+
+  const row = {};
+  existing.headers.forEach(function(header, index) {
+    row[header] = existing.values[index];
+  });
+
+  const role = normalizeUserRole_(row.role);
+
+  if (role !== "consultor") {
+    return { ok: false, error: "protected_user" };
+  }
+
+  const active = data.active === true;
+
+  const updated = {
+    username: username,
+    displayName: String(row.displayName || username),
+    role: role,
+    consultants: row.consultants || username,
+    passwordHash: String(row.passwordHash || ""),
+    active: active,
+    createdAt: row.createdAt || "",
+    updatedAt: new Date()
+  };
+
+  sheet.getRange(
+    existing.rowNumber,
+    1,
+    1,
+    existing.headers.length
+  ).setValues([
+    existing.headers.map(function(header) {
+      return updated[header] !== undefined
+        ? updated[header]
+        : row[header] || "";
+    })
+  ]);
+
+  return {
+    ok: true,
+    user: userPublic_(updated)
+  };
+}
 
 function appendCrmActivity_(record) {
   const sheet = getCrmActivitiesSheet_();
@@ -2314,6 +2559,8 @@ function factoryResetCommercial_(data) {
 function doPost(e) {
   const data = parseBody_(e);
   const action = data.action || "track";
+  if (action === "upsert_user") return jsonOutput(upsertUser_(data));
+  if (action === "update_user_status") return jsonOutput(updateUserStatus_(data));
 
   if (action === "track") return jsonOutput(appendEvent_(data));
   if (action === "create_offer_short") return jsonOutput(createShortOffer_(data));
@@ -2377,6 +2624,7 @@ function doPost(e) {
 function doGet(e) {
   const action = e && e.parameter && (e.parameter.action || e.parameter.mode);
   const params = e && e.parameter ? e.parameter : {};
+  if (action === "get_users") return jsonOutput(readUsers_());
 
   if (action === "resolve_offer_short") return jsonOutput(resolveShortOffer_((e.parameter || {}).code));
   if (action === "reservations_public") return jsonOutput(getPublicReservations_((e.parameter || {}).sessionId));
@@ -2384,6 +2632,7 @@ function doGet(e) {
   if (action === "track") return jsonOutput(appendEvent_(params));
 
   const adminReads = {
+    get_users: true,
     events: true,
     summary: true,
     reservations_admin: true,

@@ -19,6 +19,9 @@ import {
   postAnalyticsAction,
   postAnalyticsActionWithRetry,
   clearEvents,
+  fetchUsers,
+  saveUser,
+  updateUserStatus,
 } from "./core/api/analytics-client.js";
 import { reservationExpiryLabel, normalizeReservation, fetchActiveReservations } from "./core/api/reservation-client.js";
 import {
@@ -408,6 +411,10 @@ function App() {
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
   const [actionFilter, setActionFilter] = useState("all");
+  const [users, setUsers] = useState([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+  const [userForm, setUserForm] = useState(null);
+  const [userStatus, setUserStatus] = useState("");
   const clientModalOpenRef = useRef(false);
 
   const {
@@ -440,6 +447,26 @@ function App() {
     setStatus,
     setIsLoading
   });
+  async function loadUsers() {
+    if (!isAdminUser) return;
+    setIsLoadingUsers(true);
+    setUserStatus("");
+    try {
+      const rows = await fetchUsers();
+      setUsers(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setUserStatus(error?.message || "Não foi possível carregar os usuários.");
+    } finally {
+      setIsLoadingUsers(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeView === "users" && isAdminUser) {
+      loadUsers();
+    }
+  }, [activeView, isAdminUser]);
+
   function showToast(message, type = "success") {
     setToast({ id: Date.now(), message, type });
   }
@@ -1144,7 +1171,7 @@ function App() {
     { id: "catalog", label: "Catálogo e estoque", icon: <Eye size={17}/>, badge: alerts.filter((item) => item.view === "catalog").length },
     { id: "carts", label: "Carrinhos", icon: <ShoppingCart size={17}/>, badge: reservationKpis.carts },
     { id: "offers", label: "Ofertas", icon: <Send size={17}/>, badge: offers.length },
-    ...(isAdminUser ? [{ id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length }] : []),
+    ...(isAdminUser ? [{ id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length }, { id: "users", label: "Usuários", icon: <Users size={17}/> }] : []),
     { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
   ];
   const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
@@ -1160,6 +1187,7 @@ function App() {
     carts: "Carrinhos atuais, interesses expirados e acompanhamento comercial em um só lugar.",
     offers: "Do link especial criado até a cotação enviada.",
     quality: "Limpeza seletiva, prévia e padronização dos dados sem apagar empresas reais.",
+    users: "Gerencie usuários, perfis e acessos ao CRM.",
     events: "Histórico detalhado dos eventos do catálogo."
   };
   const dueTaskRows = normalizedTasks.filter((item) => item.status === "open" && crmContactDate(item.dueAt) && crmContactDate(item.dueAt).getTime() <= endOfDay(new Date()).getTime());
@@ -1484,6 +1512,26 @@ function App() {
         </div>
       ) : null}
 
+      {activeView === "users" ? (
+        <div className="view-stack">
+          <UsersAdminView
+            users={users}
+            loading={isLoadingUsers}
+            status={userStatus}
+            onNewUser={() => setUserForm({ username: "", displayName: "", role: "consultor", consultants: "", password: "" })}
+            onToggleUser={async (user) => {
+              try {
+                setUserStatus("");
+                await updateUserStatus({ username: user.username, active: !user.active });
+                await loadUsers();
+              } catch (error) {
+                setUserStatus(error?.message || "Não foi possível atualizar o usuário.");
+              }
+            }}
+          />
+        </div>
+      ) : null}
+
       {activeView === "events" ? (
         <div className="view-stack">
           <section className="panel">
@@ -1676,6 +1724,63 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
   </article>;
 }
 
+function UsersAdminView({ users = [], loading = false, status = "", onNewUser, onToggleUser }) {
+  return (
+    <section className="panel">
+      <div className="panelHeader">
+        <div>
+          <h2>Usuários</h2>
+          <p>Gerencie os acessos ao CRM e Analytics.</p>
+        </div>
+        <button className="primaryButton" onClick={onNewUser}>
+          <UserPlus size={16} />
+          Novo usuário
+        </button>
+      </div>
+
+      {status && <div className="statusMessage">{status}</div>}
+
+      {loading ? (
+        <div className="emptyState">Carregando usuários...</div>
+      ) : users.length === 0 ? (
+        <div className="emptyState">Nenhum usuário cadastrado.</div>
+      ) : (
+        <div className="tableWrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Usuário</th>
+                <th>Nome</th>
+                <th>Perfil</th>
+                <th>Consultores</th>
+                <th>Status</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.username}>
+                  <td>{user.username}</td>
+                  <td>{user.displayName}</td>
+                  <td>{user.role}</td>
+                  <td>{Array.isArray(user.consultants) ? user.consultants.join(", ") : user.consultants || "-"}</td>
+                  <td>{user.active ? "Ativo" : "Inativo"}</td>
+                  <td>
+                    {user.role === "consultor" && (
+                      <button className="ghostButton" onClick={() => onToggleUser(user)}>
+                        {user.active ? "Desativar" : "Ativar"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
 function CompanyDataManager({ companies = [], busy, onMerge, onDelete }) {
   const [targetName, setTargetName] = useState("");
   const [sourceNames, setSourceNames] = useState([]);
@@ -2530,6 +2635,15 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
+
+
+
+
+
+
+
 
 
 

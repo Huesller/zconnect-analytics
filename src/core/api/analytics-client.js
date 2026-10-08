@@ -85,6 +85,18 @@ async function postAnalyticsActionWithRetry(action, payload = {}, options = {}) 
   throw new Error("Não foi possível concluir a operação.");
 }
 
+async function fetchUsers() {
+  const data = await fetchAnalyticsAction("get_users");
+  return Array.isArray(data.users) ? data.users : [];
+}
+
+async function saveUser(payload) {
+  return postAnalyticsAction("upsert_user", payload);
+}
+
+async function updateUserStatus(payload) {
+  return postAnalyticsAction("update_user_status", payload);
+}
 export {
   fetchEvents,
   fetchCatalogHealth,
@@ -92,7 +104,9 @@ export {
   postAnalyticsAction,
   clearEvents,
   waitForRetry,
-  postAnalyticsActionWithRetry
+  postAnalyticsActionWithRetry,
+  fetchUsers,
+  saveUser,
+  updateUserStatus
 };
-
 

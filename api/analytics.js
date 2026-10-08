@@ -149,7 +149,7 @@ function scopePayload(action, data, profile) {
 }
 
 const ADMIN_ONLY_ACTIONS = new Set([
-  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "delete_company_data", "clear_events", "reset", "clear", "factory_reset_commercial", "update_crm_settings"
+  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "delete_company_data", "clear_events", "reset", "clear", "factory_reset_commercial", "update_crm_settings", "get_users", "upsert_user", "update_user_status"
 ]);
 
 export default async function handler(req, res) {
@@ -226,4 +226,5 @@ export default async function handler(req, res) {
     return json(res, 502, { ok: false, error: error?.name === "AbortError" ? "analytics_timeout" : "analytics_unavailable" });
   }
 }
+
 
