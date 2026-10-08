@@ -1521,32 +1521,32 @@ async function loadUsers() {
             setUserForm={setUserForm}
             loading={isLoadingUsers}
             status={userStatus}
-            onNewUser={async (form) => {
-              if (!form?.username?.trim() || !form?.displayName?.trim() || !form?.password) {
-                setUserStatus("Preencha usuário, nome e senha.");
-                return;
-              }
-              if (form.password.length < 8) {
-                setUserStatus("A senha deve ter pelo menos 8 caracteres.");
-                return;
-              }
-              try {
-                setUserStatus("");
-                await saveUser({
-                  username: form.username.trim(),
-                  displayName: form.displayName.trim(),
-                  role: form.role,
-                  consultants: form.consultants.split(",").map((item) => item.trim()).filter(Boolean),
-                  password: form.password,
-                  active: true
-                });
-                setUserForm(null);
-                await loadUsers();
-              } catch (error) {
-                setUserStatus(error?.message || "Não foi possível cadastrar o usuário.");
-              }
-            }}
-            onToggleUser={async (user) => {
+            onNewUser={() => setUserForm({ username: "", displayName: "", role: "consultor", consultants: "", password: "" })}
+          onSaveUser={async (form) => {
+            if (!form?.username?.trim() || !form?.displayName?.trim() || !form?.password) {
+              setUserStatus("Preencha usuário, nome e senha.");
+              return;
+            }
+            if (form.password.length < 8) {
+              setUserStatus("A senha deve ter pelo menos 8 caracteres.");
+              return;
+            }
+            try {
+              setUserStatus("");
+              await saveUser({
+                username: form.username.trim(),
+                displayName: form.displayName.trim(),
+                role: form.role,
+                consultants: form.consultants.split(",").map((item) => item.trim()).filter(Boolean),
+                password: form.password,
+                active: true
+              });
+              setUserForm(null);
+              await loadUsers();
+            } catch (error) {
+              setUserStatus(error?.message || "Não foi possível cadastrar o usuário.");
+            }
+          }}          onToggleUser={async (user) => {
               try {
                 setUserStatus("");
                 await updateUserStatus({ username: user.username, active: !user.active });
@@ -1761,7 +1761,7 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
   </article>;
 }
 
-function UsersAdminView({ users = [], loading = false, status = "", onNewUser, onToggleUser, onDeleteUser, userForm, setUserForm }) {
+function UsersAdminView({ users = [], loading = false, status = "", onNewUser, onSaveUser, onToggleUser, onDeleteUser, userForm, setUserForm }) {
   return (
     <section className="panel">
       <div className="panelHeader">
@@ -1813,7 +1813,7 @@ function UsersAdminView({ users = [], loading = false, status = "", onNewUser, o
           </div>
 
           <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            <button className="primaryButton" onClick={() => onNewUser(userForm)}>Salvar usuário</button>
+            <button className="primaryButton" onClick={() => onSaveUser(userForm)}>Salvar usuário</button>
             <button className="ghostButton" onClick={() => setUserForm(null)}>Cancelar</button>
           </div>
         </div>
@@ -2718,6 +2718,8 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
 
 
 
