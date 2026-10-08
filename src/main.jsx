@@ -11,6 +11,7 @@ import { countBy } from "./shared/collections.js";
 import { CONTACT_ACTIVITY_OPTIONS } from "./shared/crm-options.js";
 import { EVENT_LABELS } from "./shared/event-labels.js";
 import PipelineBoard from "./modules/crm/components/PipelineBoard.jsx";
+import ClientCrmTable from "./modules/crm/components/ClientCrmTable.jsx";
 import {
   fetchEvents,
   fetchCatalogHealth,
@@ -1345,7 +1346,7 @@ function App() {
             { icon: <Send/>, label: "Valor cotado", value: money(crmRows.reduce((sum, item) => sum + item.quoteTotalNumber, 0)), emphasis: true }
           ]}/>
           <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Novo cliente</button><button type="button" className="crm-secondary-action" onClick={() => setIsClientImportOpen(true)}><Upload size={16}/> Importar carteira</button><span>PDF do SIGGMA, Excel ou CSV, sempre com prévia antes de gravar.</span></div>
-          <ClientCrmTable rows={crmRows} activities={normalizedActivities} onOpen={openClientProfile}/>
+          <ClientCrmTable rows={crmRows} activities={normalizedActivities} onOpen={openClientProfile} pipelineStages={PIPELINE_STAGES}/>
         </div>
       ) : null}
 
@@ -1947,88 +1948,6 @@ function CommercialReports({ activities = [], clients = [], onOpen }) {
   return <div className="view-stack commercial-reports"><StatGrid items={[{icon:<MessageSquare/>,label:"Ocorrências",value:rows.length},{icon:<Building2/>,label:"Clientes envolvidos",value:byClient.length},{icon:<AlertTriangle/>,label:"Mais recorrente",value:recurrence[0]?.label || "-",emphasis:true},{icon:<UserCheck/>,label:"Vendas registradas",value:rows.filter((item) => item.type === "sale_completed_note").length}]}/><article className="panel"><div className="panel-head"><div><h2><TrendingUp size={18}/> Relatório comercial</h2><p>Entenda os motivos que mais se repetem e em quais clientes.</p></div><button type="button" className="crm-secondary-action" onClick={exportReport}><Download size={16}/> Exportar Excel</button></div><div className="table-tools"><label><CalendarDays size={14}/> Período<select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="today">Hoje</option><option value="yesterday">Ontem</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="90d">Últimos 90 dias</option><option value="date">Data específica</option><option value="custom">Período personalizado</option><option value="all">Todo o histórico</option></select></label>{period === "date" ? <label><CalendarDays size={14}/> Data<input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}/></label> : null}{period === "custom" ? <><label><CalendarDays size={14}/> De<input type="date" value={periodStart} max={periodEnd || undefined} onChange={(event) => setPeriodStart(event.target.value)}/></label><label><CalendarDays size={14}/> Até<input type="date" value={periodEnd} min={periodStart || undefined} onChange={(event) => setPeriodEnd(event.target.value)}/></label></> : null}<label><Filter size={14}/> Ocorrência<select value={type} onChange={(event) => setType(event.target.value)}><option value="all">Todas</option>{CONTACT_ACTIVITY_OPTIONS.map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, responsável, tag ou anotação"/></label></div><nav className="report-tabs"><button type="button" className={tab === "occurrences" ? "active" : ""} onClick={() => setTab("occurrences")}>Recorrências</button><button type="button" className={tab === "clients" ? "active" : ""} onClick={() => setTab("clients")}>Por cliente</button></nav>{tab === "occurrences" ? <div className="report-table"><div className="report-table-head"><span>Ocorrência</span><span>Registros</span><span>Clientes</span><span>Última ocorrência</span></div>{recurrence.map((item) => <div key={item.key}><strong>{item.label}</strong><b>{item.total}</b><span>{item.clients}</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></div>)}{!recurrence.length ? <EmptyState message="Nenhuma ocorrência no período."/> : null}</div> : <div className="report-table clients"><div className="report-table-head"><span>Cliente</span><span>Registros</span><span>Mais recorrente</span><span>Última ocorrência</span></div>{byClient.map((item) => <button type="button" key={item.client.companyKey} onClick={() => onOpen(item.client)}><strong>{item.client.company}</strong><b>{item.total}</b><span>{item.topType} ({item.topCount})</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></button>)}{!byClient.length ? <EmptyState message="Nenhum cliente no período."/> : null}</div>}</article></div>;
 }
 
-function ClientTagSelector({ value = "", onChange }) {
-  const selected = parseClientTags(value);
-  const legacy = selected.filter((tag) => !CLIENT_TAGS.includes(tag));
-  function toggle(tag) {
-    onChange(serializeClientTags(selected.includes(tag) ? selected.filter((item) => item !== tag) : [...selected, tag]));
-  }
-  return <div className="fixed-tag-selector">{CLIENT_TAGS.map((tag) => <label key={tag} className={selected.includes(tag) ? "selected" : ""}><input type="checkbox" checked={selected.includes(tag)} onChange={() => toggle(tag)}/><span>{tag}</span></label>)}{legacy.map((tag) => <button type="button" key={tag} className="legacy-tag" onClick={() => toggle(tag)} title="Remover tag antiga">{tag} ×</button>)}</div>;
-}
-
-function ClientCrmTable({ rows = [], activities = [], onOpen }) {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
-  const [health, setHealth] = useState("all");
-  const [notesOnly, setNotesOnly] = useState(false);
-  const [tag, setTag] = useState("all");
-  const [funnel, setFunnel] = useState("all");
-  const [sort, setSort] = useState("company");
-  const noteKeys = useMemo(() => new Set(activities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type)).map((item) => item.companyKey)), [activities]);
-  const visibleRows = rows.filter((row) => {
-    const needle = query.trim().toLowerCase();
-    const rowTags = parseClientTags(row.tags);
-    return (status === "all" || row.statusKey === status) && (health === "all" || commercialHealth(row).key === health) && (tag === "all" || rowTags.includes(tag)) && (funnel === "all" || (funnel === "out" ? row.statusKey === "out_of_funnel" : row.statusKey !== "out_of_funnel")) && (!notesOnly || noteKeys.has(row.companyKey)) && (!needle || row._search.includes(needle));
-  }).sort((a, b) => sort === "recent" ? new Date(b.lastPurchaseAt || 0) - new Date(a.lastPurchaseAt || 0) : sort === "days_desc" ? purchaseDays(b) - purchaseDays(a) : sort === "total_desc" ? b.purchaseTotal - a.purchaseTotal : a.company.localeCompare(b.company, "pt-BR"));
-
-  function exportClients() {
-    const columns = [
-      { key: "code", label: "Código" }, { key: "company", label: "Cliente" }, { key: "taxId", label: "CPF/CNPJ" },
-      { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone / WhatsApp" }, { key: "email", label: "E-mail" },
-      { key: "city", label: "Cidade" }, { key: "state", label: "UF" }, { key: "owner", label: "Responsável" },
-      { key: "stage", label: "Etapa" }, { key: "exitReason", label: "Motivo da saída do funil" }, { key: "tags", label: "Tags" },
-      { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" },
-      { key: "purchaseTotal", label: "Total comprado" }, { key: "nextContact", label: "Próximo contato" }
-    ];
-    const exportRows = visibleRows.map((row) => ({
-      code: row.customerCode || "", company: row.company || "", taxId: row.taxId || "", contact: row.contactName || "",
-      phone: row.phone || "", email: row.email || "", city: row.city || "", state: row.state || "", owner: row.owner || "",
-      stage: row.status || "", exitReason: row.funnelExitReason || "", tags: parseClientTags(row.tags).join(", "),
-      lastPurchase: row.lastPurchaseAt ? dateOnly(row.lastPurchaseAt) : "", days: purchaseDays(row) || "", health: commercialHealth(row).label,
-      purchaseTotal: safeNumber(row.purchaseTotal), nextContact: row.nextContactAt ? dateOnly(row.nextContactAt) : ""
-    }));
-    const listName = funnel === "out" ? "Clientes fora do funil" : funnel === "in" ? "Clientes no funil" : "Carteira de clientes";
-    downloadBlob(buildExcelWorkbook([{ name: "Clientes", rows: tableRows(listName, columns, exportRows), autoFilterRow: 3, freezeRows: 3, columnWidths: [13, 34, 20, 22, 20, 28, 20, 8, 20, 20, 32, 36, 16, 16, 22, 18, 18] }]), `zconnect-${slugifyFilePart(listName)}-${fileDateStamp()}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  }
-
-  return (
-    <article className="panel crm-table-panel">
-      <div className="panel-head">
-        <div><h2><Building2 size={18}/> Carteira de clientes</h2><p>Clique em qualquer linha para abrir histórico, anotações e próximo contato.</p></div>
-        <div className="crm-table-head-actions"><span>{visibleRows.length} cliente(s)</span><button type="button" className="crm-secondary-action" onClick={exportClients} disabled={!visibleRows.length}><Download size={16}/> Exportar Excel</button></div>
-      </div>
-      <div className="table-tools">
-        <label><Search size={14}/> Buscar <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="empresa, contato, código interno, telefone ou tag"/></label>
-        <label><Filter size={14}/> Etapa
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="all">Todas</option>{PIPELINE_STAGES.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}<option value="active">Cliente ativo</option><option value="cold">Frio</option>
-          </select>
-        </label>
-        <label><Filter size={14}/> Recência da compra<select value={health} onChange={(event) => setHealth(event.target.value)}><option value="all">Todas</option><option value="active">Comprou recentemente</option><option value="attention">31–60 dias</option><option value="risk">61–120 dias</option><option value="inactive">Mais de 120 dias</option><option value="no_history">Sem histórico de compra</option></select></label>
-        <label><Filter size={14}/> Tag<select value={tag} onChange={(event) => setTag(event.target.value)}><option value="all">Todas as tags</option>{CLIENT_TAGS.map((item) => <option key={item}>{item}</option>)}</select></label>
-        <label><Filter size={14}/> Funil<select value={funnel} onChange={(event) => setFunnel(event.target.value)}><option value="all">Todos</option><option value="in">No funil</option><option value="out">Fora do funil</option></select></label>
-        <label><TrendingUp size={14}/> Ordenar<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="company">Nome</option><option value="recent">Compra mais recente</option><option value="days_desc">Mais dias sem comprar</option><option value="total_desc">Maior total comprado</option></select></label>
-        <label className="check-tool"><input type="checkbox" checked={notesOnly} onChange={(event) => setNotesOnly(event.target.checked)}/> Com anotações</label>
-      </div>
-      <div className="crm-table-wrap">
-        <table className="crm-table">
-          <thead><tr><th>Cliente</th><th>Etapa</th><th>Responsável</th><th>Última compra</th><th>Dias sem comprar</th><th>Recência da compra</th><th>Total comprado</th><th>Próximo contato</th></tr></thead>
-          <tbody>
-            {visibleRows.map((row) => (
-              <tr key={row.id} tabIndex="0" onClick={() => onOpen(row)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(row); }}>
-                <td><strong>{row.company}</strong><small>{row.customerCode ? `Código ${row.customerCode} · ` : ""}{row.contactName || row.lastEvent}</small></td>
-                <td><span className={`crm-status status-${row.statusKey}`}>{row.status}</span>{row.funnelExitReason ? <small>{row.funnelExitReason}</small> : null}</td>
-                <td>{row.owner || "-"}</td><td>{row.lastPurchaseAt ? dateOnly(row.lastPurchaseAt) : "-"}</td><td>{purchaseDays(row) || "-"}</td><td><span className={`commercial-health health-${commercialHealth(row).key}`}>{commercialHealth(row).label}</span></td><td>{row.purchaseTotal ? money(row.purchaseTotal) : "-"}</td><td>{row.nextContact}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!visibleRows.length ? <EmptyState message="Nenhum cliente corresponde aos filtros atuais."/> : null}
-      </div>
-    </article>
-  );
-}
-
 function LegacyClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
   const initialContactDate = crmContactDate(client.nextContactAt);
   const initialDate = initialContactDate ? localDateInput(initialContactDate) : "";
@@ -2608,6 +2527,8 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
 
 
 
