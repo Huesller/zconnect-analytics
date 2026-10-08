@@ -18,6 +18,10 @@ function profileFromSession(session) {
   return session.profile || { username: session.user, displayName: session.user, role: "admin", consultants: ["*"] };
 }
 
+function isManager(profile) {
+  return profile.role === "gestor" || profile.role === "manager";
+}
+
 function isAdmin(profile) {
   return profile.role === "admin" || (profile.consultants || []).includes("*");
 }
@@ -126,7 +130,7 @@ async function canWriteScopedRecord(apiUrl, adminToken, action, body, profile, s
 }
 
 function scopePayload(action, data, profile) {
-  if (isAdmin(profile) || !data || typeof data !== "object") return data;
+  if (isAdmin(profile) || isManager(profile) || !data || typeof data !== "object") return data;
   const allowed = allowedConsultants(profile);
   const keep = (row) => allowed.has(rowConsultant(row));
   if (action === "events" && Array.isArray(data.events)) return { ...data, events: data.events.filter(keep) };
@@ -222,3 +226,4 @@ export default async function handler(req, res) {
     return json(res, 502, { ok: false, error: error?.name === "AbortError" ? "analytics_timeout" : "analytics_unavailable" });
   }
 }
+

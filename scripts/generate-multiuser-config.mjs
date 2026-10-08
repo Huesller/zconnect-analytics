@@ -4,6 +4,7 @@ import { stdin as input, stdout as output } from "node:process";
 
 const USERS = [
   { username: "admin", displayName: "Administrador", role: "admin", consultants: ["*"] },
+  { username: "gestor", displayName: "Gestor", role: "gestor", consultants: [] },
   { username: "huesller", displayName: "Huesller", role: "consultant", consultants: ["huesller"] },
   { username: "ney", displayName: "Ney", role: "consultant", consultants: ["ney", "ivoney"] },
   { username: "almir", displayName: "Almir", role: "consultant", consultants: ["almir"] },
@@ -32,3 +33,5 @@ rl.close();
 
 console.log("\nCrie esta variável sensível na Vercel:");
 console.log(`ANALYTICS_USERS_JSON=${JSON.stringify(configured)}`);
+
+
