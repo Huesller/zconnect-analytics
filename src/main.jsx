@@ -453,7 +453,15 @@ function App() {
   useEffect(() => {
     if (!toast) return undefined;
     const timer = window.setTimeout(() => setToast(null), 3600);
-    return () => window.clearTimeout(timer);
+    useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    const allowed = canAccessView(activeView);
+    if (!allowed && navigation.length) {
+      setActiveView(navigation[0].id);
+    }
+  }, [authStatus, authProfile.role, activeView]);
+  return () => window.clearTimeout(timer);
   }, [toast]);
 
   const consultants = useMemo(() => {
@@ -1172,6 +1180,14 @@ function App() {
     return true;
   });
 
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    const allowed = canAccessView(activeView);
+    if (!allowed && navigation.length) {
+      setActiveView(navigation[0].id);
+    }
+  }, [authStatus, authProfile.role, activeView]);
   return (
     <main className="app analytics-app">
       <header className="analytics-topbar">
@@ -2527,6 +2543,8 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
 
 
 
