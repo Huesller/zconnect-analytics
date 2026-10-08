@@ -1,5 +1,5 @@
 import { normalizeConsultant, normalizeCompany, safeNumber } from "../../../shared/normalization.js";
-import { companyKey } from "../../../shared/company-utils.js";
+import { companyKey, isAnonymousCompany } from "../../../shared/company-utils.js";
 import {
   productFromEvent,
   productLabel,
@@ -217,3 +217,4 @@ export {
   dormantCompanyRows,
   specialOfferRows
 };
+
