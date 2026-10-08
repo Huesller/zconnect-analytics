@@ -464,6 +464,14 @@ function App() {
   return () => window.clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (authStatus !== "authenticated") return;
+
+    const allowed = canAccessView(activeView);
+    if (!allowed && navigation.length) {
+      setActiveView(navigation[0].id);
+    }
+  }, [authStatus, authProfile.role, activeView]);
   const consultants = useMemo(() => {
     return ["all", ...new Set([
       ...events.map((event) => normalizeConsultant(event.consultant)),
@@ -2543,6 +2551,8 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
 
 
 
