@@ -15,6 +15,7 @@ import {
   dateTime,
   dateOnly
 } from "../../../shared/dates.js";
+import { CONTACT_ACTIVITY_OPTIONS } from "../../../shared/crm-options.js";
 
 function parseClientTags(value) {
   return [...new Set(String(value || "").split(/[,;|]/).map((item) => item.trim()).filter(Boolean))];
@@ -155,6 +156,8 @@ export {
   clientProfilePayload,
   buildCompanyAdminOptions
 };
+
+
 
 
 
