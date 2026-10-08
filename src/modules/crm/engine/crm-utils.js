@@ -1,3 +1,5 @@
+import { safeNumber } from "../../../shared/normalization.js";
+
 function crmStatusLabel(status) {
   const labels = {
     new: "Novo interesse",
@@ -32,3 +34,4 @@ export {
   crmStatusLabel,
   purchaseDays
 };
+
