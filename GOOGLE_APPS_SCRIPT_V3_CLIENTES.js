@@ -2556,10 +2556,31 @@ function factoryResetCommercial_(data) {
   } finally { lock.releaseLock(); }
 }
 
+function deleteUser_(data) {
+  if (!validateAdminAccess_(data)) {
+    return { ok: false, error: "unauthorized" };
+  }
+
+  const username = normalizeUserUsername_(data.username);
+  const sheet = getUsersSheet_();
+  const existing = findUserRow_(sheet, username);
+
+  if (!existing) return { ok: false, error: "user_not_found" };
+
+  const role = normalizeUserRole_(existing.values[existing.headers.indexOf("role")]);
+  if (role === "admin" || role === "gestor") {
+    return { ok: false, error: "protected_user" };
+  }
+
+  sheet.deleteRow(existing.rowNumber);
+  return { ok: true, username: username };
+}
+
 function doPost(e) {
   const data = parseBody_(e);
   const action = data.action || "track";
   if (action === "upsert_user") return jsonOutput(upsertUser_(data));
+  if (action === "delete_user") return jsonOutput(deleteUser_(data));
   if (action === "update_user_status") return jsonOutput(updateUserStatus_(data));
 
   if (action === "track") return jsonOutput(appendEvent_(data));
@@ -2667,3 +2688,5 @@ function doGet(e) {
 
   return jsonOutput({ ok: true, service: "Z Connect Analytics CRM 12.2 + Rankings Publicos V1" });
 }
+
+

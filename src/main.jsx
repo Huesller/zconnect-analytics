@@ -22,6 +22,7 @@ import {
   fetchUsers,
   saveUser,
   updateUserStatus,
+  deleteUser,
 } from "./core/api/analytics-client.js";
 import { reservationExpiryLabel, normalizeReservation, fetchActiveReservations } from "./core/api/reservation-client.js";
 import {
@@ -1516,9 +1517,35 @@ async function loadUsers() {
         <div className="view-stack">
           <UsersAdminView
             users={users}
+            userForm={userForm}
+            setUserForm={setUserForm}
             loading={isLoadingUsers}
             status={userStatus}
-            onNewUser={() => setUserForm({ username: "", displayName: "", role: "consultor", consultants: "", password: "" })}
+            onNewUser={async (form) => {
+              if (!form?.username?.trim() || !form?.displayName?.trim() || !form?.password) {
+                setUserStatus("Preencha usuário, nome e senha.");
+                return;
+              }
+              if (form.password.length < 8) {
+                setUserStatus("A senha deve ter pelo menos 8 caracteres.");
+                return;
+              }
+              try {
+                setUserStatus("");
+                await saveUser({
+                  username: form.username.trim(),
+                  displayName: form.displayName.trim(),
+                  role: form.role,
+                  consultants: form.consultants.split(",").map((item) => item.trim()).filter(Boolean),
+                  password: form.password,
+                  active: true
+                });
+                setUserForm(null);
+                await loadUsers();
+              } catch (error) {
+                setUserStatus(error?.message || "Não foi possível cadastrar o usuário.");
+              }
+            }}
             onToggleUser={async (user) => {
               try {
                 setUserStatus("");
@@ -1526,6 +1553,16 @@ async function loadUsers() {
                 await loadUsers();
               } catch (error) {
                 setUserStatus(error?.message || "Não foi possível atualizar o usuário.");
+              }
+            }}
+            onDeleteUser={async (user) => {
+              if (!window.confirm(`Excluir o usuário "${user.username}"?`)) return;
+              try {
+                setUserStatus("");
+                await deleteUser({ username: user.username });
+                await loadUsers();
+              } catch (error) {
+                setUserStatus(error?.message || "Não foi possível excluir o usuário.");
               }
             }}
           />
@@ -1724,7 +1761,7 @@ function CartWorkspace({ activeRows = [], historyRows = [], onOpenActive, onOpen
   </article>;
 }
 
-function UsersAdminView({ users = [], loading = false, status = "", onNewUser, onToggleUser }) {
+function UsersAdminView({ users = [], loading = false, status = "", onNewUser, onToggleUser, onDeleteUser, userForm, setUserForm }) {
   return (
     <section className="panel">
       <div className="panelHeader">
@@ -1740,6 +1777,47 @@ function UsersAdminView({ users = [], loading = false, status = "", onNewUser, o
 
       {status && <div className="statusMessage">{status}</div>}
 
+      {userForm && (
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panelHeader">
+            <div>
+              <h3>Novo usuário</h3>
+              <p>Crie um novo acesso ao CRM e Analytics.</p>
+            </div>
+          </div>
+
+          <div className="formGrid">
+            <label>
+              Usuário
+              <input value={userForm.username} onChange={(e) => setUserForm({ ...userForm, username: e.target.value })} />
+            </label>
+            <label>
+              Nome
+              <input value={userForm.displayName} onChange={(e) => setUserForm({ ...userForm, displayName: e.target.value })} />
+            </label>
+            <label>
+              Perfil
+              <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value })}>
+                <option value="consultor">Consultor</option>
+                <option value="gestor">Gestor</option>
+              </select>
+            </label>
+            <label>
+              Consultores
+              <input value={userForm.consultants} onChange={(e) => setUserForm({ ...userForm, consultants: e.target.value })} placeholder="Ex.: huesller, ney" />
+            </label>
+            <label>
+              Senha
+              <input type="password" value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <button className="primaryButton" onClick={() => onNewUser(userForm)}>Salvar usuário</button>
+            <button className="ghostButton" onClick={() => setUserForm(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
       {loading ? (
         <div className="emptyState">Carregando usuários...</div>
       ) : users.length === 0 ? (
@@ -1767,9 +1845,14 @@ function UsersAdminView({ users = [], loading = false, status = "", onNewUser, o
                   <td>{user.active ? "Ativo" : "Inativo"}</td>
                   <td>
                     {user.role === "consultor" && (
-                      <button className="ghostButton" onClick={() => onToggleUser(user)}>
-                        {user.active ? "Desativar" : "Ativar"}
-                      </button>
+                      <>
+                        <button className="ghostButton" onClick={() => onToggleUser(user)}>
+                          {user.active ? "Desativar" : "Ativar"}
+                        </button>
+                        <button className="ghostButton" onClick={() => onDeleteUser(user)}>
+                          Excluir
+                        </button>
+                      </>
                     )}
                   </td>
                 </tr>
@@ -2635,6 +2718,16 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
+
+
+
+
+
+
+
+
 
 
 

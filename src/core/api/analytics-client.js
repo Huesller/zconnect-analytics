@@ -94,6 +94,10 @@ async function saveUser(payload) {
   return postAnalyticsAction("upsert_user", payload);
 }
 
+async function deleteUser(payload) {
+  return postAnalyticsAction("delete_user", payload);
+}
+
 async function updateUserStatus(payload) {
   return postAnalyticsAction("update_user_status", payload);
 }
@@ -107,6 +111,8 @@ export {
   postAnalyticsActionWithRetry,
   fetchUsers,
   saveUser,
-  updateUserStatus
+  updateUserStatus,
+  deleteUser
 };
+
 

@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { json, requireSession } from "../lib/server-auth.js";
 
 const UPSTREAM_READ_CACHE = new Map();
@@ -7,6 +8,11 @@ function parseBody(req) {
   if (!req.body) return {};
   if (typeof req.body === "object") return req.body;
   try { return JSON.parse(req.body); } catch { return {}; }
+}
+
+function hashUserPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  return `${salt}:${crypto.scryptSync(String(password), salt, 64).toString("hex")}`;
 }
 
 function normalizeConsultant(value) {
@@ -149,7 +155,7 @@ function scopePayload(action, data, profile) {
 }
 
 const ADMIN_ONLY_ACTIONS = new Set([
-  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "delete_company_data", "clear_events", "reset", "clear", "factory_reset_commercial", "update_crm_settings", "get_users", "upsert_user", "update_user_status"
+  "cleanup_candidates", "cleanup_selected_companies", "merge_companies", "delete_company_data", "clear_events", "reset", "clear", "factory_reset_commercial", "update_crm_settings", "get_users", "upsert_user", "update_user_status", "delete_user"
 ]);
 
 export default async function handler(req, res) {
@@ -204,6 +210,11 @@ export default async function handler(req, res) {
           body.clients = body.clients.map((client) => ({ ...client, owner: primaryConsultant }));
         }
       }
+      if (action === "upsert_user" && body.password) {
+        body.passwordHash = hashUserPassword(body.password);
+        delete body.password;
+      }
+
       body.adminToken = adminToken;
       if (body.action === "catalog_snapshot") body.syncToken = String(process.env.CATALOG_SYNC_TOKEN || adminToken);
       response = await fetch(apiUrl, {
@@ -226,5 +237,10 @@ export default async function handler(req, res) {
     return json(res, 502, { ok: false, error: error?.name === "AbortError" ? "analytics_timeout" : "analytics_unavailable" });
   }
 }
+
+
+
+
+
 
 
