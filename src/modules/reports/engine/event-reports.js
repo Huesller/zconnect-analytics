@@ -2,6 +2,7 @@ import { normalizeConsultant, normalizeCompany, safeNumber } from "../../../shar
 import { productFromEvent, productLabel, productQuantity, productValue, quoteProducts, quoteProductsSummary, quoteItemsCount } from "../../../shared/product-utils.js";
 import { money, percent } from "../../../shared/formatting.js";
 import { dateTime } from "../../../shared/dates.js";
+import { EVENT_LABELS } from "../../../shared/event-labels.js";
 import { commercialEventScore } from "../../commercial-intelligence/engine/commercial-engine.js";
 function sheetTitle(title, subtitle = "") {
   const rows = [{ values: [title], styleId: "title" }];

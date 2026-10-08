@@ -58,6 +58,10 @@ async function postAnalyticsAction(action, payload = {}) {
   return data;
 }
 
+async function clearEvents(pin) {
+  return postAnalyticsAction("clear_events", { pin });
+}
+
 function waitForRetry(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -86,6 +90,7 @@ export {
   fetchCatalogHealth,
   fetchAnalyticsAction,
   postAnalyticsAction,
+  clearEvents,
   waitForRetry,
   postAnalyticsActionWithRetry
 };

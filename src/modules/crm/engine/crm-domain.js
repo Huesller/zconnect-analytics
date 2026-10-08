@@ -10,6 +10,10 @@ import {
   safeNumber
 } from "../../../shared/normalization.js";
 
+import { purchaseDays } from "./crm-utils.js";
+
+const AUTOMATIC_NOTE_TEXT = { not_answered: "Cliente não atendeu." };
+
 import {
   crmContactDate,
   dateTime,

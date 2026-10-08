@@ -9,12 +9,15 @@ import { copyTextToClipboard } from "./shared/browser.js";
 import { cartFollowUpMessage, stockRestockMessage } from "./modules/commercial-intelligence/engine/commercial-messages.js";
 import { countBy } from "./shared/collections.js";
 import { CONTACT_ACTIVITY_OPTIONS } from "./shared/crm-options.js";
+import { EVENT_LABELS } from "./shared/event-labels.js";
+import PipelineBoard from "./modules/crm/components/PipelineBoard.jsx";
 import {
   fetchEvents,
   fetchCatalogHealth,
   fetchAnalyticsAction,
   postAnalyticsAction,
   postAnalyticsActionWithRetry,
+  clearEvents,
 } from "./core/api/analytics-client.js";
 import { reservationExpiryLabel, normalizeReservation, fetchActiveReservations } from "./core/api/reservation-client.js";
 import {
@@ -184,19 +187,6 @@ const RESET_SUCCESS_MESSAGE = "Dados de teste limpos com sucesso";
 const RESET_ERROR_MESSAGE = "Erro ao limpar dados. Verifique Apps Script/PIN";
 
 
-const EVENT_LABELS = {
-  page_view: "Acesso",
-  search: "Busca",
-  search_no_results: "Busca sem resultado",
-  product_open: "Produto aberto",
-  add_to_cart: "Adicionado",
-  remove_from_cart: "Removido",
-  clear_cart: "Carrinho limpo",
-  whatsapp_quote: "Cotação WhatsApp",
-  special_offer_created: "Oferta criada",
-  special_offer_opened: "Oferta aberta"
-};
-
 const PIPELINE_STAGES = [
   { key: "new", label: "Novo interesse" },
   { key: "contact", label: "Em contato" },
@@ -216,7 +206,6 @@ const FUNNEL_EXIT_REASONS = ["Linha mecânica — não atendemos", "Cliente bloq
 const CONTACT_ACTIVITY_TYPES = ["whatsapp_sent", "contact_return", "not_answered", "call_completed", "quote_sent", "missing_stock", "high_price", "no_return", "negotiation_note", "sale_completed_note"];
 
 const OPTIONAL_NOTE_TYPES = new Set(["not_answered"]);
-const AUTOMATIC_NOTE_TEXT = { not_answered: "Cliente não atendeu." };
 const TASK_PRESETS = ["Ligar", "Retornar ligação", "Mensagem WhatsApp", "Retorno WhatsApp", "Enviar e-mail", "Retorno e-mail", "Retorno de cotação", "Enviar catálogo", "Agendar visita", "Acompanhar pedido"];
 
 const EVENT_HISTORY_COLUMNS = [
@@ -1737,60 +1726,6 @@ function CompanyDataManager({ companies = [], busy, onMerge, onDelete }) {
   </section>;
 }
 
-function PipelineBoard({ rows = [], activities = [], tasks = [], onOpen, onMove }) {
-  const [moving, setMoving] = useState("");
-  const [selectedStage, setSelectedStage] = useState(PIPELINE_STAGES[0].key);
-  async function move(client, status) {
-    if (client.statusKey === status) return;
-    setMoving(client.companyKey);
-    try { await onMove(client, status); } finally { setMoving(""); }
-  }
-  function jumpToStage(stageKey) {
-    setSelectedStage(stageKey);
-    document.getElementById(`pipeline-stage-${stageKey}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-  }
-  return (
-    <>
-      <nav className="pipeline-stage-nav" aria-label="Ir para uma etapa do funil">
-        {PIPELINE_STAGES.filter((stage) => ACTIVE_PIPELINE_STAGE_KEYS.has(stage.key)).map((stage) => {
-          const count = rows.filter((row) => row.statusKey === stage.key).length;
-          return <button type="button" key={stage.key} className={selectedStage === stage.key ? "active" : ""} onClick={() => jumpToStage(stage.key)}><span>{stage.label}</span><b>{count}</b></button>;
-        })}
-      </nav>
-      <section className="pipeline-board">
-        {PIPELINE_STAGES.filter((stage) => ACTIVE_PIPELINE_STAGE_KEYS.has(stage.key)).map((stage) => {
-          const stageRows = rows.filter((row) => row.statusKey === stage.key).sort((a, b) => pipelineNextAction(a, activities, tasks).time - pipelineNextAction(b, activities, tasks).time);
-          const stageValue = stageRows.reduce((sum, row) => sum + safeNumber(row.expectedValue || row.quoteTotalNumber), 0);
-          return (
-            <article id={`pipeline-stage-${stage.key}`} className={`pipeline-column stage-${stage.key}`} key={stage.key} onDragOver={(event) => event.preventDefault()} onDrop={(event) => {
-              event.preventDefault();
-              const key = event.dataTransfer.getData("text/plain");
-              const client = rows.find((row) => row.companyKey === key);
-              if (client) move(client, stage.key);
-            }}>
-              <header><span>{stage.label}</span><b>{stageRows.length}</b><small>{money(stageValue)}</small></header>
-              <div className="pipeline-cards">
-                {stageRows.map((client) => {
-                  const clientActivities = activities.filter((activity) => activity.companyKey === client.companyKey && !activity.deletedAt);
-                  const attempts = clientActivities.filter((activity) => CONTACT_ACTIVITY_TYPES.includes(activity.type));
-                  const lastAttempt = attempts.slice().sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw))[0];
-                  const next = pipelineNextAction(client, activities, tasks);
-                  return <button type="button" draggable key={client.companyKey} className={`pipeline-card card-${next.urgency}`} onDragStart={(event) => event.dataTransfer.setData("text/plain", client.companyKey)} onClick={() => onOpen(client)} disabled={moving === client.companyKey}>
-                    <strong>{client.company}</strong><span>{client.owner || "Sem responsável"}</span><small>{client.itemCount || 0} item(ns) · {attempts.length} tentativa(s)</small><b>{client.expectedValue ? money(client.expectedValue) : client.quoteTotal}</b>
-                    {lastAttempt ? <em>Último: {noteTypeLabel(lastAttempt.type)} · {lastAttempt.createdAtLabel}</em> : <em>Nenhum contato registrado</em>}
-                    <mark className={`next-action ${next.urgency}`}>{next.label}</mark>
-                  </button>;
-                })}
-                {!stageRows.length ? <p className="pipeline-empty">Solte um cliente aqui</p> : null}
-              </div>
-            </article>
-          );
-        })}
-      </section>
-    </>
-  );
-}
-
 function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing = [], stock = [], onOpenSearched, onOpenHot, onOpenQuoted, onOpenMissing, onOpenSearchTerm, onOpenStock }) {
   const [tab, setTab] = useState("searched");
   const [stockFilter, setStockFilter] = useState("all");
@@ -2673,6 +2608,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
