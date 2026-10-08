@@ -1,5 +1,7 @@
 import {
-  companyKey
+  companyKey,
+  isAnonymousCompany,
+  cleanupReason
 } from "../../../shared/company-utils.js";
 
 import {
@@ -153,4 +155,5 @@ export {
   clientProfilePayload,
   buildCompanyAdminOptions
 };
+
 
