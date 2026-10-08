@@ -447,7 +447,9 @@ function App() {
     setStatus,
     setIsLoading
   });
-  async function loadUsers() {
+    const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");
+
+async function loadUsers() {
     if (!isAdminUser) return;
     setIsLoadingUsers(true);
     setUserStatus("");
@@ -1155,8 +1157,6 @@ function App() {
   if (authStatus !== "authenticated") {
     return <LoginScreen onLogin={login} />;
   }
-
-  const isAdminUser = authProfile.role === "admin" || authProfile.consultants?.includes("*");
   const funnelRows = crmRows.filter((item) => hasCommercialOpportunity(item, normalizedActivities, normalizedTasks, filteredManualDemands));
   const closedFunnelRows = crmRows.filter((item) => ["won", "lost"].includes(item.statusKey));
   const outOfFunnelRows = crmRows.filter((item) => item.statusKey === "out_of_funnel");
@@ -2635,6 +2635,7 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
 
 
 
