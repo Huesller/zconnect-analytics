@@ -8,6 +8,7 @@ import { whatsappPhone } from "./shared/contact.js";
 import { copyTextToClipboard } from "./shared/browser.js";
 import { cartFollowUpMessage, stockRestockMessage } from "./modules/commercial-intelligence/engine/commercial-messages.js";
 import { countBy } from "./shared/collections.js";
+import { CONTACT_ACTIVITY_OPTIONS } from "./shared/crm-options.js";
 import {
   fetchEvents,
   fetchCatalogHealth,
@@ -213,14 +214,7 @@ const LOST_REASONS = ["Sem estoque", "Preço", "Frete", "Prazo", "Cliente desist
 const CLIENT_TAGS = ["Venda sob encomenda", "Cliente potencial", "Cliente bloqueado", "Linha mecânica", "Fora do perfil", "Compra recorrente", "Cliente em reativação"];
 const FUNNEL_EXIT_REASONS = ["Linha mecânica — não atendemos", "Cliente bloqueado", "Fora do perfil", "Fora da região atendida", "Segmento não atendido", "Cliente sem interesse", "Outro motivo"];
 const CONTACT_ACTIVITY_TYPES = ["whatsapp_sent", "contact_return", "not_answered", "call_completed", "quote_sent", "missing_stock", "high_price", "no_return", "negotiation_note", "sale_completed_note"];
-const CONTACT_ACTIVITY_OPTIONS = [
-  ["whatsapp_sent", "WhatsApp enviado"], ["contact_return", "Retorno de contato"],
-  ["not_answered", "Não atendeu"], ["call_completed", "Ligação realizada"],
-  ["quote_sent", "Cotação enviada"], ["missing_stock", "Falta de mercadoria"],
-  ["high_price", "Preço alto"], ["no_return", "Sem retorno"],
-  ["negotiation_note", "Negociação"], ["sale_completed_note", "Venda realizada"],
-  ["note", "Anotações gerais"]
-];
+
 const OPTIONAL_NOTE_TYPES = new Set(["not_answered"]);
 const AUTOMATIC_NOTE_TEXT = { not_answered: "Cliente não atendeu." };
 const TASK_PRESETS = ["Ligar", "Retornar ligação", "Mensagem WhatsApp", "Retorno WhatsApp", "Enviar e-mail", "Retorno e-mail", "Retorno de cotação", "Enviar catálogo", "Agendar visita", "Acompanhar pedido"];
@@ -2679,6 +2673,9 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
+
 
 
 
