@@ -1,0 +1,25 @@
+import React from "react";
+
+const MODULES = [
+{ id: "gestao", name: "AXION Gestão", description: "Indicadores, relatórios e administração." },
+{ id: "crm", name: "AXION CRM", description: "Clientes, oportunidades e relacionamento." },
+{ id: "catalogo", name: "AXION Catálogo", description: "Produtos, estoque e publicação." }
+];
+
+export function AxionModuleFrame({ moduleId, onNavigate, children }) {
+const current = MODULES.find((item) => item.id === moduleId) || MODULES[0];
+
+return (
+<div className={"axion-module axion-module-" + current.id}> <header className="axion-module-header"> <div className="axion-module-brand"> <span className="axion-module-mark">A</span> <span> <small>SISTEMA OPERACIONAL COMERCIAL</small> <strong>AXION <i>{current.name.replace("AXION ", "")}</i></strong> </span> </div>
+<button className="axion-home-button" type="button" onClick={() => onNavigate("home")}>
+Todos os módulos </button> </header> <div className="axion-module-body"> <section className="axion-module-content">{children}</section> </div> </div>
+);
+}
+
+export function AxionCloudHome({ onSelect }) {
+return ( <main className="axion-cloud-home"> <header className="axion-module-header"> <div className="axion-module-brand"> <span className="axion-module-mark">A</span> <span> <small>SISTEMA OPERACIONAL COMERCIAL</small> <strong>AXION <i>Cloud</i></strong> </span> </div> </header> <section className="axion-cloud-welcome"> <span>WORKSPACE COMERCIAL</span> <h1>Organize. Transforme. Publique.</h1> <p>Escolha o ambiente em que deseja trabalhar.</p> </section> <div className="axion-cloud-modules">
+{MODULES.map((item, index) => (
+<button type="button" key={item.id} className="axion-cloud-module-card" onClick={() => onSelect(item.id)}> <span className="axion-cloud-card-mark">{String(index + 1).padStart(2, "0")}</span> <strong>{item.name}</strong> <span>{item.description}</span> <b>Entrar no módulo <i>↗</i></b> </button>
+))} </div> </main>
+);
+}

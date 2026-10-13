@@ -11,7 +11,13 @@ import { countBy } from "./shared/collections.js";
 import { CONTACT_ACTIVITY_OPTIONS } from "./shared/crm-options.js";
 import { EVENT_LABELS } from "./shared/event-labels.js";
 import PipelineBoard from "./modules/crm/components/PipelineBoard.jsx";
+import PipelineView from "./modules/crm/PipelineView.jsx";
 import ClientCrmTable from "./modules/crm/components/ClientCrmTable.jsx";
+import CrmNotesCenterView from "./modules/crm/CrmNotesCenterView.jsx";
+import CommercialReportsView from "./modules/crm/CommercialReportsView.jsx";
+import ProductIntelligenceView from "./modules/catalog/ProductIntelligenceView.jsx";
+import CatalogHealthView from "./modules/catalog/CatalogHealthView.jsx";
+import CrmClientsView from "./modules/crm/CrmClientsView.jsx";
 import {
   fetchEvents,
   fetchCatalogHealth,
@@ -146,6 +152,8 @@ import { useCrmActions } from "./modules/crm/useCrmActions.js";
 import { handleSelectiveCleanup as runSelectiveCleanup, handleMergeDuplicates as runMergeDuplicates, handleManualMerge as runManualMerge, handleCompanyDataDeletion as runCompanyDataDeletion } from "./modules/admin-quality/engine/admin-actions.js";
 import { consultantActivityRows, dormantCompanyRows, specialOfferRows } from "./modules/reports/engine/commercial-reports.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { AxionCloudHome, AxionModuleFrame } from "./core/layout/AxionModuleFrame.jsx";
+import AxionWorkspaceNav from "./core/layout/AxionWorkspaceNav.jsx";
 import { createRoot } from "react-dom/client";
 import {
   AlertTriangle,
@@ -411,6 +419,8 @@ function App() {
   const [isSavingCrm, setIsSavingCrm] = useState(false);
   const [qualityStatus, setQualityStatus] = useState("");
   const [activeView, setActiveView] = useState("overview");
+  const [activeModule, setActiveModule] = useState("home");
+  const axionHomeRequested = activeModule === "home";
   const [actionFilter, setActionFilter] = useState("all");
   const [users, setUsers] = useState([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
@@ -1175,7 +1185,9 @@ async function loadUsers() {
     ...(isAdminUser ? [{ id: "quality", label: "Qualidade", icon: <Filter size={17}/>, badge: cleanupCandidates.length }, { id: "users", label: "Usuários", icon: <Users size={17}/> }] : []),
     { id: "events", label: "Atividade", icon: <UserCheck size={17}/> }
   ];
-  const currentView = navigation.find((item) => item.id === activeView) || navigation[0];
+  const moduleViews = { gestao: ["overview", "reports", "events", "users", "quality"], crm: ["opportunities", "pipeline", "crm", "notes", "carts", "offers"], catalogo: ["products", "catalog"] };
+  const visibleNavigation = navigation.filter((item) => moduleViews[activeModule].includes(item.id));
+  const currentView = visibleNavigation.find((item) => item.id === activeView) || visibleNavigation[0];
   const viewDescriptions = {
     overview: "Os números essenciais para decidir rápido.",
     opportunities: "A fila diária combina retornos, carrinhos, cotações e sinais de compra.",
@@ -1204,14 +1216,15 @@ async function loadUsers() {
   });
 
 
+  if (activeModule === "home") return <AxionCloudHome onSelect={(moduleId) => { setActiveModule(moduleId); setActiveView(({ gestao: "overview", crm: "opportunities", catalogo: "products" })[moduleId]); }} />;
   return (
     <main className="app analytics-app">
       <header className="analytics-topbar">
         <div className="analytics-brand">
-          <span className="analytics-brand-mark">Z</span>
+          <span className="analytics-brand-mark">A</span>
           <div>
-            <small>Inteligência comercial</small>
-            <h1>Z Connect</h1>
+            <small>Sistema Operacional Comercial</small>
+            <h1>AXION <span className="axion-brand-systems">Sistemas</span></h1>
           </div>
         </div>
         <div className="analytics-top-actions">
@@ -1230,7 +1243,7 @@ async function loadUsers() {
         </div>
       </header>
 
-      <section className="analytics-controlbar">
+      <section className="analytics-controlbar" hidden={activeModule !== "gestao"}>
         <div className="analytics-status">
           <i className={isLoading ? "loading" : ""}/>
           <span>{status}</span>
@@ -1283,18 +1296,9 @@ async function loadUsers() {
         </div>
       </section>
 
-      <nav className="analytics-nav" aria-label="Áreas do Analytics">
-        {navigation.map((item) => (
-          <button key={item.id} type="button" className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
-            {item.icon}<span>{item.label}</span>{item.badge ? <b>{item.badge}</b> : null}
-          </button>
-        ))}
-      </nav>
-
-      <section className="analytics-view-head">
-        <div><span>Área atual</span><h2>{currentView.label}</h2></div>
-        <p>{viewDescriptions[activeView]}</p>
-      </section>
+      
+<AxionModuleFrame moduleId={activeModule} onNavigate={setActiveModule}>
+      <AxionWorkspaceNav activeModule={activeModule} setActiveModule={setActiveModule} activeView={activeView} setActiveView={setActiveView} visibleNavigation={visibleNavigation} currentView={currentView} viewDescriptions={viewDescriptions} />
 
       {dueFollowUps ? <button type="button" className="due-task-banner" onClick={() => {
         const task = dueTaskRows[0];
@@ -1355,36 +1359,13 @@ async function loadUsers() {
         </div>
       ) : null}
 
-      {activeView === "pipeline" ? (
-        <div className="view-stack">
-          <StatGrid items={[
-            { icon: <Building2/>, label: "Clientes no funil", value: funnelRows.length },
-            { icon: <Send/>, label: "Cotação enviada", value: funnelRows.filter((item) => item.statusKey === "quoted").length },
-            { icon: <TrendingUp/>, label: "Em negociação", value: funnelRows.filter((item) => item.statusKey === "negotiation").length, emphasis: true },
-            { icon: <UserCheck/>, label: "Fora do funil", value: outOfFunnelRows.length }
-          ]}/>
-          <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Cadastrar cliente</button><span>O cliente será incluído diretamente na etapa escolhida.</span></div>
-          <PipelineBoard rows={funnelRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} onOpen={openClientProfile} onMove={moveClientStage}/>
-          <section className="pipeline-closed-summary"><div><strong>{closedFunnelRows.filter((item) => item.statusKey === "won").length}</strong><span>pedidos fechados no histórico</span></div><div><strong>{closedFunnelRows.filter((item) => item.statusKey === "lost").length}</strong><span>oportunidades perdidas no histórico</span></div><p>Ganhos e perdas não ocupam o Kanban ativo e continuam disponíveis nos relatórios e no Cliente 360.</p></section>
-        </div>
-      ) : null}
+      {activeView === "pipeline" ? <PipelineView rows={funnelRows} activities={normalizedActivities} tasks={crmTasks.map(normalizeCrmTask)} outOfFunnelRows={outOfFunnelRows} closedFunnelRows={closedFunnelRows} onOpen={openClientProfile} onMove={moveClientStage} onNewClient={() => setIsNewClientOpen(true)} /> : null}
 
-      {activeView === "crm" ? (
-        <div className="view-stack">
-          <StatGrid items={[
-            { icon: <Building2/>, label: "Clientes reais", value: crmRows.length },
-            { icon: <TrendingUp/>, label: "Em negociação", value: negotiationClients, emphasis: true },
-            { icon: <CalendarDays/>, label: "Próximos contatos vencidos", value: dueFollowUps },
-            { icon: <Send/>, label: "Valor cotado", value: money(crmRows.reduce((sum, item) => sum + item.quoteTotalNumber, 0)), emphasis: true }
-          ]}/>
-          <div className="crm-view-actions"><button type="button" className="crm-primary-action" onClick={() => setIsNewClientOpen(true)}><UserPlus size={16}/> Novo cliente</button><button type="button" className="crm-secondary-action" onClick={() => setIsClientImportOpen(true)}><Upload size={16}/> Importar carteira</button><span>PDF do SIGGMA, Excel ou CSV, sempre com prévia antes de gravar.</span></div>
-          <ClientCrmTable rows={crmRows} activities={normalizedActivities} onOpen={openClientProfile} pipelineStages={PIPELINE_STAGES}/>
-        </div>
-      ) : null}
+      {activeView === "crm" ? <CrmClientsView rows={crmRows} activities={normalizedActivities} negotiationClients={negotiationClients} dueFollowUps={dueFollowUps} onNewClient={() => setIsNewClientOpen(true)} onImport={() => setIsClientImportOpen(true)} onOpen={openClientProfile} pipelineStages={PIPELINE_STAGES} quotedTotal={crmRows.reduce((sum, item) => sum + item.quoteTotalNumber, 0)} /> : null}
 
-      {activeView === "notes" ? <CrmNotesCenter activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile} onUpdate={updateClientNote}/> : null}
+      {activeView === "notes" ? <CrmNotesCenterView activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile} onUpdate={updateClientNote} NOTE_ACTIVITY_TYPES={NOTE_ACTIVITY_TYPES} localDateInput={localDateInput} isSamePeriod={isSamePeriod} dateOnly={dateOnly} noteTypeLabel={noteTypeLabel} purchaseDays={purchaseDays} commercialHealth={commercialHealth} tableRows={tableRows} buildExcelWorkbook={buildExcelWorkbook} downloadBlob={downloadBlob} fileDateStamp={fileDateStamp} EmptyState={EmptyState} /> : null}
 
-      {activeView === "reports" ? <CommercialReports activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile}/> : null}
+      {activeView === "reports" ? <CommercialReportsView activities={normalizedActivities} clients={crmRows} onOpen={openClientProfile} localDateInput={localDateInput} isSamePeriod={isSamePeriod} NOTE_ACTIVITY_TYPES={NOTE_ACTIVITY_TYPES} CONTACT_ACTIVITY_OPTIONS={CONTACT_ACTIVITY_OPTIONS} noteTypeLabel={noteTypeLabel} dateTime={dateTime} tableRows={tableRows} buildExcelWorkbook={buildExcelWorkbook} downloadBlob={downloadBlob} fileDateStamp={fileDateStamp} EmptyState={EmptyState} /> : null}
 
       {activeView === "products" ? (
         <div className="view-stack">
@@ -1394,12 +1375,12 @@ async function loadUsers() {
             { icon: <Send/>, label: "Itens cotados", value: productQuotedRank.length, onOpen: openQuotedProductsModal },
             { icon: <AlertTriangle/>, label: "Buscas sem resultado", value: kpis.noResults, onOpen: openNoResultDemandModal }
           ]}/>
-          <ProductIntelligenceView searched={confirmedSearches} hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenSearched={openConfirmedSearchesModal} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenSearchTerm={openSearchTermClients} onOpenStock={openDemandProduct}/>
+          <ProductIntelligenceView searched={confirmedSearches} hot={hotProducts} quoted={quotedProducts} missing={noResultDemand} stock={demandStockRows} onOpenSearched={openConfirmedSearchesModal} onOpenHot={openHotProductsModal} onOpenQuoted={openQuotedProductsModal} onOpenMissing={openNoResultDemandModal} onOpenSearchTerm={openSearchTermClients} onOpenStock={openDemandProduct} EmptyState={EmptyState}/>
         </div>
       ) : null}
 
       {activeView === "catalog" ? (
-        <CatalogHealthView health={catalogHealth} demandRows={demandStockRows} onNavigate={setActiveView} onOpenDemand={openDemandProduct}/>
+        <CatalogHealthView health={catalogHealth} demandRows={demandStockRows} onNavigate={setActiveView} onOpenDemand={openDemandProduct} safeNumber={safeNumber} dateTime={dateTime} EmptyState={EmptyState}/>
       ) : null}
 
       {activeView === "carts" ? (
@@ -1590,6 +1571,7 @@ async function loadUsers() {
         </div>
       ) : null}
 
+      </AxionModuleFrame>
       {activeModal ? <HistoryModal key={activeModal.id} modal={activeModal} onClose={() => setActiveModal(null)}/> : null}
       {selectedClient ? (
         <ClientProfileModal
@@ -1918,47 +1900,6 @@ function CompanyDataManager({ companies = [], busy, onMerge, onDelete }) {
   </section>;
 }
 
-function ProductIntelligenceView({ searched = [], hot = [], quoted = [], missing = [], stock = [], onOpenSearched, onOpenHot, onOpenQuoted, onOpenMissing, onOpenSearchTerm, onOpenStock }) {
-  const [tab, setTab] = useState("searched");
-  const [stockFilter, setStockFilter] = useState("all");
-  const [stockQuery, setStockQuery] = useState("");
-  const tabs = [
-    ["searched", "Pesquisas confirmadas", searched.length],
-    ["hot", "Produtos acessados", hot.length],
-    ["quoted", "Mais cotados", quoted.length],
-    ["stock", "Demanda x estoque", stock.length],
-    ["missing", "Não encontrados", missing.length]
-  ];
-  const sourceRows = tab === "searched" ? searched : tab === "hot" ? hot : tab === "quoted" ? quoted : tab === "stock" ? stock : missing;
-  const rows = tab === "stock" ? sourceRows.filter((row) => (stockFilter === "all" || row.signalKey === stockFilter) && (!stockQuery.trim() || row._search.includes(stockQuery.trim().toLowerCase()))) : sourceRows;
-  function splitLabel(label) {
-    const text = String(label || "");
-    const index = text.indexOf(" - ");
-    return index < 0 ? { code: "-", name: text || "-" } : { code: text.slice(0, index), name: text.slice(index + 3) };
-  }
-  return <article className="panel product-intelligence">
-    <div className="panel-head"><div><h2><Flame size={18}/> Inteligência de produtos</h2><p>Buscas confirmadas ficam separadas das interações reais com cada produto.</p></div><button type="button" className="refresh" onClick={tab === "searched" ? onOpenSearched : tab === "hot" ? onOpenHot : tab === "quoted" ? onOpenQuoted : tab === "missing" ? onOpenMissing : undefined} disabled={tab === "stock"}>Abrir relatório completo</button></div>
-    <nav className="product-tabs">{tabs.map(([key, label, count]) => <button type="button" key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><span>{label}</span><b>{count}</b></button>)}</nav>
-    {tab === "stock" ? <div className="demand-filterbar"><label><Search size={14}/> Buscar<input value={stockQuery} onChange={(event) => setStockQuery(event.target.value)} placeholder="código, produto ou marca"/></label><label><Filter size={14}/> Prioridade<select value={stockFilter} onChange={(event) => setStockFilter(event.target.value)}><option value="all">Todas</option><option value="unavailable">Procura sem disponibilidade</option><option value="priority">Reposição prioritária</option><option value="pressure">Estoque sob pressão</option><option value="restocked">Estoque normalizado</option><option value="normal">Demanda normal</option></select></label></div> : null}
-    <div className="product-readable-table">
-      <div className="product-readable-head"><span>Produto / termo</span><span>{["searched", "missing"].includes(tab) ? "Ocorrências" : "Aberturas"}</span><span>{tab === "stock" ? "Estoque" : ["searched", "missing"].includes(tab) ? "Empresas" : "Carrinhos"}</span><span>{tab === "stock" ? "Disponível" : ["searched", "missing"].includes(tab) ? "Consultores" : "Cotações"}</span><span>Sinal</span></div>
-      {rows.slice(0, 50).map((row, index) => {
-        const isSearchTerm = ["searched", "missing"].includes(tab);
-        const label = isSearchTerm ? row.search : tab === "stock" ? `${row.productCode} - ${row.productName}` : row.product;
-        const product = splitLabel(label);
-        const first = isSearchTerm ? row.count : tab === "stock" ? row.demandScore : row.views;
-        const second = isSearchTerm ? row.companies : tab === "stock" ? row.stockQty : row.carts;
-        const third = isSearchTerm ? row.consultants : tab === "stock" ? row.availableQty : row.quotes;
-        const signal = isSearchTerm ? (tab === "missing" ? "Sem resultado" : "Busca confirmada") : tab === "stock" ? row.signal : `${row.score || 0} pts`;
-        const clickable = tab === "stock" || isSearchTerm;
-        const openRow = () => tab === "stock" ? onOpenStock?.(row) : onOpenSearchTerm?.(row, tab === "missing");
-        return <div className={`product-readable-row ${clickable ? "clickable-demand" : ""}`} role={clickable ? "button" : undefined} tabIndex={clickable ? 0 : undefined} onClick={clickable ? openRow : undefined} onKeyDown={clickable ? (event) => { if (event.key === "Enter") openRow(); } : undefined} key={row.id || `${label}-${index}`}><span><b>{product.code}</b><small>{product.name}</small></span><strong>{first || 0}</strong><strong>{second || 0}</strong><strong>{third || 0}</strong><em>{signal}</em></div>;
-      })}
-      {!rows.length ? <EmptyState message="Sem dados para esta leitura no período."/> : null}
-    </div>
-  </article>;
-}
-
 function ProductDemandModal({ product, onClose, onOpenClient, onCopy }) {
   const [query, setQuery] = useState("");
   const clients = (product.clients || []).filter((client) => !query.trim() || [client.company, client.contactName, client.customerCode, client.phone, client.consultant].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
@@ -1978,50 +1919,6 @@ function ProductDemandModal({ product, onClose, onOpenClient, onCopy }) {
       return <article key={client.companyKey}><button type="button" className="demand-client-main" onClick={() => onOpenClient(client.crmClient || client)}><span><strong>{client.company}</strong><small>{client.customerCode ? `Código ${client.customerCode} · ` : ""}{client.contactName || "Contato não informado"}</small></span><span><b>{client.searches || 0}</b><small>buscas</small></span><span><b>{client.views || 0}</b><small>aberturas</small></span><span><b>{client.carts || 0}</b><small>carrinho</small></span><span><b>{client.quotes || 0}</b><small>cotações</small></span><time>{client.lastAt ? dateTime(client.lastAt) : "-"}</time></button><div className="demand-client-actions"><button type="button" onClick={() => onOpenClient(client.crmClient || client)}><Eye size={14}/> Cliente 360</button>{product.stockQty > 0 ? <><button type="button" onClick={() => copyTextToClipboard(message)}><Copy size={14}/> Copiar</button>{phone ? <a href={`https://wa.me/${phone}?text=${encodeURIComponent(message)}`} target="_blank" rel="noreferrer"><Send size={14}/> WhatsApp</a> : null}</> : <span>Aguardando reposição</span>}</div></article>;
     })}{!clients.length ? <EmptyState message="Nenhum cliente corresponde à busca."/> : null}</div>
   </section></div>;
-}
-
-function DemandStockTable({ rows = [], onOpen }) {
-  const [query, setQuery] = useState("");
-  const [signal, setSignal] = useState("all");
-  const visibleRows = rows.filter((row) => (signal === "all" || row.signalKey === signal) && (!query.trim() || row._search.includes(query.trim().toLowerCase())));
-  return (
-    <article className="panel demand-stock-panel">
-      <div className="panel-head"><div><h2><Flame size={18}/> Demanda x estoque</h2><p>Filtre por prioridade e clique no item para ver todos os clientes interessados.</p></div><span>{visibleRows.length} produto(s)</span></div>
-      <div className="demand-filterbar"><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="código, produto ou marca"/></label><label><Filter size={14}/> Prioridade<select value={signal} onChange={(event) => setSignal(event.target.value)}><option value="all">Todas</option><option value="unavailable">Procura sem disponibilidade</option><option value="priority">Reposição prioritária</option><option value="pressure">Estoque sob pressão</option><option value="restocked">Estoque normalizado</option><option value="normal">Demanda normal</option><option value="no_snapshot">Sem snapshot</option></select></label></div>
-      <div className="demand-stock-table">
-        <div className="demand-stock-head"><span>Produto</span><span>Demanda</span><span>Estoque</span><span>Reservado</span><span>Disponível</span><span>Sinal</span></div>
-        {visibleRows.length ? visibleRows.map((row) => <button type="button" key={row.id} className="demand-stock-row demand-stock-button" onClick={() => onOpen?.(row)}><span><strong>{row.productCode}</strong><small>{row.productName}</small><small>{row.clientsCount} cliente(s) interessado(s)</small></span><b>{row.demandScore}</b><b>{row.stockQty}</b><b>{row.reservedQty}</b><b>{row.availableQty}</b><span className={`stock-signal ${["priority","unavailable"].includes(row.signalKey) ? "critical" : row.signalKey === "pressure" ? "warning" : row.signalKey === "restocked" ? "restocked" : "normal"}`}>{row.signal}</span></button>) : <EmptyState message="Nenhum produto corresponde aos filtros."/>}
-      </div>
-    </article>
-  );
-}
-
-function CatalogHealthView({ health = {}, demandRows = [], onNavigate, onOpenDemand }) {
-  const latest = health.latest;
-  const snapshots = health.snapshots || [];
-  const age = latest ? Date.now() - new Date(latest.createdAt).getTime() : Infinity;
-  const freshness = !latest ? "Aguardando integração" : latest.status === "error" ? "Falha" : age > 36 * 60 * 60 * 1000 ? "Atrasado" : "Atualizado";
-  return (
-    <div className="view-stack catalog-view">
-      <StatGrid items={[
-        { icon: <RefreshCw/>, label: "Situação da atualização", value: freshness, emphasis: freshness === "Atualizado" },
-        { icon: <Building2/>, label: "Produtos monitorados", value: safeNumber(latest?.productCount) },
-        { icon: <ShoppingCart/>, label: "Com estoque", value: safeNumber(latest?.inStockCount) },
-        { icon: <AlertTriangle/>, label: "Sem imagem", value: safeNumber(latest?.missingImageCount) }
-      ]}/>
-      <section className="catalog-grid">
-        <article className="panel catalog-summary">
-          <div className="panel-head"><div><h2><RefreshCw size={18}/> Atualização diária</h2><p>O catálogo envia o estoque automaticamente após cada publicação na Vercel.</p></div><span className={`health-badge health-${freshness.toLowerCase().replace(/[^a-z]+/g, "-")}`}>{freshness}</span></div>
-          {latest ? <><div className="catalog-facts"><div><span>Última execução</span><strong>{dateTime(latest.createdAt)}</strong></div><div><span>Duração</span><strong>{safeNumber(latest.durationMs)} ms</strong></div><div><span>Novos</span><strong>{safeNumber(latest.newCount)}</strong></div><div><span>Removidos</span><strong>{safeNumber(latest.removedCount)}</strong></div><div><span>Estoques alterados</span><strong>{safeNumber(latest.changedStockCount)}</strong></div><div><span>Sem estoque</span><strong>{safeNumber(latest.outOfStockCount)}</strong></div></div><button type="button" className="refresh catalog-action" onClick={() => onNavigate?.("products")}>Analisar produtos e demanda →</button></> : <div className="catalog-integration-empty"><AlertTriangle size={20}/><div><strong>Integração pronta, aguardando a próxima publicação</strong><p>Configure o mesmo <code>CATALOG_SYNC_TOKEN</code> nos dois projetos e faça um novo deploy do Catálogo. O primeiro snapshot será enviado sozinho.</p></div></div>}
-        </article>
-        <article className="panel snapshot-history">
-          <div className="panel-head"><div><h2><CalendarDays size={18}/> Histórico</h2><p>Últimas execuções recebidas.</p></div><span>{snapshots.length}</span></div>
-          <div>{snapshots.slice(0, 8).map((item) => <div className="snapshot-row" key={item.snapshotId}><i className={item.status === "error" ? "error" : "success"}/><span><strong>{dateTime(item.createdAt)}</strong><small>{item.source || "Atualização diária"}</small></span><b>{safeNumber(item.productCount)} produtos</b></div>)}{!snapshots.length ? <p className="empty">Sem execuções registradas.</p> : null}</div>
-        </article>
-      </section>
-      <DemandStockTable rows={demandRows} onOpen={onOpenDemand}/>
-    </div>
-  );
 }
 
 function OpportunityList({ rows = [], onOpen, onEdit, onFinish, onDelete, activeFilter = "all", onClear }) {
@@ -2068,75 +1965,6 @@ function OpportunityList({ rows = [], onOpen, onEdit, onFinish, onDelete, active
       </div>
     </article>
   );
-}
-
-function CrmNotesCenter({ activities = [], clients = [], onOpen, onUpdate }) {
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
-  const [period, setPeriod] = useState("today");
-  const [selectedDate, setSelectedDate] = useState(localDateInput());
-  const clientMap = useMemo(() => new Map(clients.map((client) => [client.companyKey, client])), [clients]);
-  const notes = useMemo(() => activities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type) && !item.deletedAt).map((activity) => ({ activity, client: clientMap.get(activity.companyKey) || { company: activity.companyName, companyKey: activity.companyKey } })), [activities, clientMap]);
-  const periodNotes = notes.filter(({ activity }) => period === "date" ? isSamePeriod(activity.createdAtRaw, "custom", selectedDate, selectedDate) : isSamePeriod(activity.createdAtRaw, period));
-  const visible = periodNotes.filter(({ activity, client }) => {
-    const needle = query.trim().toLowerCase();
-    const pending = activity.nextAction && activity.actionStatus !== "done";
-    if (status === "pending" && !pending) return false;
-    if (status === "done" && activity.actionStatus !== "done") return false;
-    if (status === "without_action" && activity.nextAction) return false;
-    return !needle || [client.company, client.customerCode, client.contactName, client.phone, client.owner, activity.note, activity.nextAction].join(" ").toLowerCase().includes(needle);
-  }).sort((a, b) => new Date(b.activity.createdAtRaw) - new Date(a.activity.createdAtRaw));
-
-  function exportNotes() {
-    const columns = [
-      { key: "code", label: "Código" }, { key: "tax", label: "CPF/CNPJ" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "city", label: "Cidade/UF" }, { key: "owner", label: "Responsável" }, { key: "type", label: "Tipo" }, { key: "note", label: "Anotação" }, { key: "created", label: "Registrada em" }, { key: "nextAction", label: "Próxima ação" }, { key: "nextDate", label: "Data da ação" }, { key: "actionStatus", label: "Status da ação" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" }
-    ];
-    const rows = visible.map(({ activity, client }) => ({ code: client.customerCode || "", tax: client.taxId || "", company: client.company || activity.companyName, contact: client.contactName || "", phone: client.phone || "", city: [client.city, client.state].filter(Boolean).join(" / "), owner: activity.owner || client.owner || "", type: noteTypeLabel(activity.type), note: activity.note, created: activity.createdAtLabel, nextAction: activity.nextAction || "", nextDate: activity.nextActionAt ? dateOnly(activity.nextActionAt) : "", actionStatus: activity.nextAction ? (activity.actionStatus === "done" ? "Concluída" : "Pendente") : "", lastPurchase: client.lastPurchaseAt ? dateOnly(client.lastPurchaseAt) : "", days: purchaseDays(client), health: commercialHealth(client).label }));
-    const clientsWithNotes = [...new Map(visible.map(({ client }) => [client.companyKey, client])).values()];
-    const clientColumns = [{ key: "code", label: "Código" }, { key: "company", label: "Cliente" }, { key: "contact", label: "Contato" }, { key: "phone", label: "Telefone" }, { key: "owner", label: "Responsável" }, { key: "lastPurchase", label: "Última compra" }, { key: "days", label: "Dias sem comprar" }, { key: "health", label: "Recência da compra" }, { key: "notes", label: "Qtd. anotações" }];
-    const clientRows = clientsWithNotes.map((client) => ({ code: client.customerCode || "", company: client.company, contact: client.contactName || "", phone: client.phone || "", owner: client.owner || "", lastPurchase: client.lastPurchaseAt ? dateOnly(client.lastPurchaseAt) : "", days: purchaseDays(client), health: commercialHealth(client).label, notes: visible.filter((item) => item.client.companyKey === client.companyKey).length }));
-    const noteSheetRows = tableRows("Anotações comerciais", columns, rows);
-    const clientSheetRows = tableRows("Clientes com anotações", clientColumns, clientRows);
-    downloadBlob(buildExcelWorkbook([{ name: "Anotações", rows: noteSheetRows, autoFilterRow: 3, freezeRows: 3, columnWidths: [12, 18, 32, 20, 18, 20, 20, 20, 55, 20, 30, 16, 15, 16, 15, 18] }, { name: "Clientes", rows: clientSheetRows, autoFilterRow: 3, freezeRows: 3, columnWidths: [12, 32, 20, 18, 20, 16, 15, 18, 15] }]), `zconnect-anotacoes-${fileDateStamp()}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  }
-
-  const pendingCount = periodNotes.filter(({ activity }) => activity.nextAction && activity.actionStatus !== "done").length;
-  return <div className="view-stack"><StatGrid items={[{ icon: <MessageSquare/>, label: "Anotações", value: periodNotes.length }, { icon: <Building2/>, label: "Clientes anotados", value: new Set(periodNotes.map((item) => item.activity.companyKey)).size }, { icon: <CalendarDays/>, label: "Ações pendentes", value: pendingCount, emphasis: true }, { icon: <UserCheck/>, label: "Ações concluídas", value: periodNotes.filter(({ activity }) => activity.actionStatus === "done").length }]}/><article className="panel notes-center"><div className="panel-head"><div><h2><MessageSquare size={18}/> Central de anotações</h2><p>Uma linha por conversa, sempre ligada à ficha original do cliente.</p></div><button type="button" className="crm-secondary-action" onClick={exportNotes}><Download size={16}/> Exportar Excel</button></div><div className="table-tools"><label><CalendarDays size={14}/> Período<select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="today">Hoje</option><option value="yesterday">Ontem</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="date">Data específica</option><option value="all">Todo o histórico</option></select></label>{period === "date" ? <label><CalendarDays size={14}/> Data<input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}/></label> : null}<label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, anotação, ação ou responsável"/></label><label><Filter size={14}/> Situação<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">Todas</option><option value="pending">Ações pendentes</option><option value="done">Ações concluídas</option><option value="without_action">Sem próxima ação</option></select></label></div><div className="notes-center-list">{visible.map(({ activity, client }) => <article key={activity.activityId}><button type="button" className="note-client" onClick={() => onOpen({ ...client, initialTab: "notes" })}><strong>{client.company || activity.companyName}</strong><small>{client.customerCode ? `Código ${client.customerCode} · ` : ""}{activity.owner || client.owner || "Sem responsável"}</small></button><div><span className="note-kind">{noteTypeLabel(activity.type)}</span><p>{activity.note}</p>{activity.nextAction ? <small><CalendarDays size={13}/> {activity.nextAction} · {activity.nextActionAt ? dateOnly(activity.nextActionAt) : "sem data"}</small> : null}</div><time>{activity.createdAtLabel}</time>{activity.nextAction ? <button type="button" className={`note-status-button ${activity.actionStatus === "done" ? "done" : ""}`} onClick={() => onUpdate(activity.activityId, { type: activity.type, note: activity.note, nextAction: activity.nextAction, nextActionAt: activity.nextActionAt, actionStatus: activity.actionStatus === "done" ? "pending" : "done" })}>{activity.actionStatus === "done" ? "Concluída" : "Concluir"}</button> : <span/>}</article>)}{!visible.length ? <EmptyState message="Nenhuma anotação corresponde aos filtros atuais."/> : null}</div></article></div>;
-}
-
-function CommercialReports({ activities = [], clients = [], onOpen }) {
-  const [period, setPeriod] = useState("30d");
-  const [selectedDate, setSelectedDate] = useState(localDateInput());
-  const [periodStart, setPeriodStart] = useState("");
-  const [periodEnd, setPeriodEnd] = useState("");
-  const [type, setType] = useState("all");
-  const [query, setQuery] = useState("");
-  const [tab, setTab] = useState("occurrences");
-  const clientMap = useMemo(() => new Map(clients.map((client) => [client.companyKey, client])), [clients]);
-  const rows = useMemo(() => activities.filter((item) => NOTE_ACTIVITY_TYPES.includes(item.type) && !item.deletedAt).filter((item) => {
-    if (type !== "all" && item.type !== type) return false;
-    if (period === "date" && !isSamePeriod(item.createdAtRaw, "custom", selectedDate, selectedDate)) return false;
-    if (period === "custom" && !isSamePeriod(item.createdAtRaw, "custom", periodStart, periodEnd)) return false;
-    if (["today", "yesterday", "7d", "30d"].includes(period) && !isSamePeriod(item.createdAtRaw, period)) return false;
-    if (period === "90d") { const date = new Date(item.createdAtRaw); if (Number.isNaN(date.getTime()) || Date.now() - date.getTime() > 90 * 86400000) return false; }
-    const client = clientMap.get(item.companyKey);
-    const needle = query.trim().toLowerCase();
-    return !needle || [client?.company, client?.customerCode, client?.owner, client?.tags, item.note, noteTypeLabel(item.type)].join(" ").toLowerCase().includes(needle);
-  }), [activities, clientMap, period, selectedDate, periodStart, periodEnd, type, query]);
-  const recurrence = useMemo(() => CONTACT_ACTIVITY_OPTIONS.map(([key, label]) => { const matches = rows.filter((item) => item.type === key); return { key, label, total: matches.length, clients: new Set(matches.map((item) => item.companyKey)).size, lastAt: matches.sort((a, b) => new Date(b.createdAtRaw) - new Date(a.createdAtRaw))[0]?.createdAtRaw || "" }; }).filter((item) => item.total).sort((a, b) => b.total - a.total), [rows]);
-  const byClient = useMemo(() => {
-    const map = new Map();
-    rows.forEach((activity) => { const client = clientMap.get(activity.companyKey) || { companyKey: activity.companyKey, company: activity.companyName }; const current = map.get(activity.companyKey) || { client, total: 0, types: new Map(), lastAt: "", lastNote: "" }; current.total += 1; current.types.set(activity.type, (current.types.get(activity.type) || 0) + 1); if (!current.lastAt || new Date(activity.createdAtRaw) > new Date(current.lastAt)) { current.lastAt = activity.createdAtRaw; current.lastNote = activity.note; } map.set(activity.companyKey, current); });
-    return [...map.values()].map((item) => { const top = [...item.types.entries()].sort((a, b) => b[1] - a[1])[0]; return { ...item, topType: top ? noteTypeLabel(top[0]) : "-", topCount: top?.[1] || 0 }; }).sort((a, b) => b.total - a.total);
-  }, [rows, clientMap]);
-  function exportReport() {
-    const detail = rows.map((item) => { const client = clientMap.get(item.companyKey) || {}; return { client: client.company || item.companyName, code: client.customerCode || "", owner: item.owner || client.owner || "", tags: client.tags || "", occurrence: noteTypeLabel(item.type), note: item.note || "", date: item.createdAtLabel }; });
-    const detailColumns = [{key:"client",label:"Cliente"},{key:"code",label:"Código"},{key:"owner",label:"Responsável"},{key:"tags",label:"Tags"},{key:"occurrence",label:"Ocorrência"},{key:"note",label:"Anotação"},{key:"date",label:"Data"}];
-    const recurrenceColumns = [{key:"label",label:"Ocorrência"},{key:"total",label:"Registros"},{key:"clients",label:"Clientes"},{key:"last",label:"Última ocorrência"}];
-    const recurrenceRows = recurrence.map((item) => ({ ...item, last: item.lastAt ? dateTime(item.lastAt) : "" }));
-    downloadBlob(buildExcelWorkbook([{ name:"Ocorrências", rows:tableRows("Relatório comercial", detailColumns, detail), autoFilterRow:3, freezeRows:3, columnWidths:[34,14,20,34,24,60,20] }, { name:"Recorrências", rows:tableRows("Recorrências comerciais", recurrenceColumns, recurrenceRows), autoFilterRow:3, freezeRows:3, columnWidths:[28,14,14,22] }]), `zconnect-relatorio-comercial-${fileDateStamp()}.xlsx`, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-  }
-  return <div className="view-stack commercial-reports"><StatGrid items={[{icon:<MessageSquare/>,label:"Ocorrências",value:rows.length},{icon:<Building2/>,label:"Clientes envolvidos",value:byClient.length},{icon:<AlertTriangle/>,label:"Mais recorrente",value:recurrence[0]?.label || "-",emphasis:true},{icon:<UserCheck/>,label:"Vendas registradas",value:rows.filter((item) => item.type === "sale_completed_note").length}]}/><article className="panel"><div className="panel-head"><div><h2><TrendingUp size={18}/> Relatório comercial</h2><p>Entenda os motivos que mais se repetem e em quais clientes.</p></div><button type="button" className="crm-secondary-action" onClick={exportReport}><Download size={16}/> Exportar Excel</button></div><div className="table-tools"><label><CalendarDays size={14}/> Período<select value={period} onChange={(event) => setPeriod(event.target.value)}><option value="today">Hoje</option><option value="yesterday">Ontem</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="90d">Últimos 90 dias</option><option value="date">Data específica</option><option value="custom">Período personalizado</option><option value="all">Todo o histórico</option></select></label>{period === "date" ? <label><CalendarDays size={14}/> Data<input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)}/></label> : null}{period === "custom" ? <><label><CalendarDays size={14}/> De<input type="date" value={periodStart} max={periodEnd || undefined} onChange={(event) => setPeriodStart(event.target.value)}/></label><label><CalendarDays size={14}/> Até<input type="date" value={periodEnd} min={periodStart || undefined} onChange={(event) => setPeriodEnd(event.target.value)}/></label></> : null}<label><Filter size={14}/> Ocorrência<select value={type} onChange={(event) => setType(event.target.value)}><option value="all">Todas</option>{CONTACT_ACTIVITY_OPTIONS.map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label><label><Search size={14}/> Buscar<input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="cliente, responsável, tag ou anotação"/></label></div><nav className="report-tabs"><button type="button" className={tab === "occurrences" ? "active" : ""} onClick={() => setTab("occurrences")}>Recorrências</button><button type="button" className={tab === "clients" ? "active" : ""} onClick={() => setTab("clients")}>Por cliente</button></nav>{tab === "occurrences" ? <div className="report-table"><div className="report-table-head"><span>Ocorrência</span><span>Registros</span><span>Clientes</span><span>Última ocorrência</span></div>{recurrence.map((item) => <div key={item.key}><strong>{item.label}</strong><b>{item.total}</b><span>{item.clients}</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></div>)}{!recurrence.length ? <EmptyState message="Nenhuma ocorrência no período."/> : null}</div> : <div className="report-table clients"><div className="report-table-head"><span>Cliente</span><span>Registros</span><span>Mais recorrente</span><span>Última ocorrência</span></div>{byClient.map((item) => <button type="button" key={item.client.companyKey} onClick={() => onOpen(item.client)}><strong>{item.client.company}</strong><b>{item.total}</b><span>{item.topType} ({item.topCount})</span><time>{item.lastAt ? dateTime(item.lastAt) : "-"}</time></button>)}{!byClient.length ? <EmptyState message="Nenhum cliente no período."/> : null}</div>}</article></div>;
 }
 
 function LegacyClientProfileModal({ client, events = [], reservations = [], tasks = [], activities = [], onClose, onSave, onSaveTask, onCompleteTask, onOutcome, isSaving }) {
@@ -2718,6 +2546,10 @@ function HistoryModal({ modal, onClose }) {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+
+
+
 
 
 

@@ -2054,3 +2054,273 @@ input:focus {
 .catalog-quote-result{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:10px;margin:14px 22px;padding:14px;border:1px solid #d9dde3;background:#fff}.catalog-quote-result>div{display:flex;flex-direction:column;gap:4px}.catalog-quote-result span{color:#667085;font-size:12px}.catalog-quote-result button{display:inline-flex;align-items:center;gap:7px;border:0;padding:10px 13px;color:#fff;font-weight:700;cursor:pointer}.catalog-quote-result .success{background:#168a55}.catalog-quote-result .danger{background:#bd2b3b}@media(max-width:760px){.catalog-quote-result{grid-template-columns:1fr}.catalog-quote-result button{justify-content:center}}
 .manual-demand-form{display:grid;grid-template-columns:minmax(300px,2fr) 100px 150px minmax(180px,1fr) 150px;gap:9px;align-items:end;margin-bottom:16px;border:1px solid var(--line);padding:14px;background:#faf9f7}.manual-demand-form label{display:grid;gap:5px;color:#55514b;font-size:9px;font-weight:850}.manual-demand-form input,.manual-demand-form select{width:100%;min-height:39px;border:1px solid #d2cec7;padding:8px 10px;background:#fff;color:#191b1f}.manual-demand-form small{color:#74716c;font-size:8px;line-height:1.35}.manual-demand-form>button{min-height:39px;border:0;background:#d7192d;color:#fff;font-size:9px;font-weight:900}.manual-demand-actions{display:flex;gap:6px}.manual-demand-actions button.success{border-color:#15905a;color:#08754a}.manual-demand-actions button.danger{border-color:#d9a8ad;color:#a31826}@media(max-width:1050px){.manual-demand-form{grid-template-columns:1fr 1fr 1fr}.demand-product-field,.demand-note-field{grid-column:span 2}}@media(max-width:650px){.manual-demand-form{grid-template-columns:1fr}.demand-product-field,.demand-note-field{grid-column:auto}.manual-demand-list article{align-items:stretch;flex-direction:column}.manual-demand-actions{justify-content:flex-end}}
 .fixed-tag-selector{display:flex;flex-wrap:wrap;gap:8px;margin-top:7px}.fixed-tag-selector label{display:inline-flex!important;align-items:center;gap:7px;width:auto!important;padding:9px 11px;border:1px solid #d8d5cf;background:#fff;cursor:pointer;font-size:12px;font-weight:700}.fixed-tag-selector label.selected{border-color:#e31b2d;background:#fff1f2;color:#a90f1e}.fixed-tag-selector input{width:auto!important;margin:0}.fixed-tag-selector .legacy-tag{border:1px dashed #aaa;background:#f5f3ef;padding:8px 10px}.crm-status.status-out_of_funnel{background:#e5e7eb;color:#374151}.report-tabs{display:flex;border-bottom:1px solid #ddd;margin:18px 0 0}.report-tabs button{border:0;background:transparent;padding:14px 20px;font-weight:800;color:#667085}.report-tabs button.active{color:#111827;border-bottom:3px solid #e31b2d}.report-table{margin-top:14px;border:1px solid #ddd}.report-table>div,.report-table>button{display:grid;grid-template-columns:minmax(240px,2fr) 120px 120px minmax(170px,1fr);align-items:center;width:100%;padding:14px 16px;border:0;border-bottom:1px solid #e5e2dc;background:#fff;text-align:left;color:#20242a}.report-table>button:hover{background:#fff5f5}.report-table .report-table-head{background:#17191d;color:#fff;font-size:11px;font-weight:900;text-transform:uppercase}.report-table time{font-size:12px;color:#667085}@media(max-width:900px){.report-table>div,.report-table>button{grid-template-columns:1fr 80px}.report-table>div>*:nth-child(n+3),.report-table>button>*:nth-child(n+3){margin-top:6px}}
+
+/* AXION Cloud — ambientes de trabalho */
+.axion-module, .axion-cloud-home {
+min-height: 100vh;
+color: #e8eef8;
+background: #080d16;
+}
+.axion-module-header {
+min-height: 78px;
+padding: 16px clamp(18px, 4vw, 56px);
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 18px;
+border-bottom: 1px solid #1c2b42;
+background: #0b1220;
+}
+.axion-module-brand {
+display: flex;
+align-items: center;
+gap: 13px;
+color: inherit;
+text-decoration: none;
+}
+.axion-module-mark {
+display: grid;
+place-items: center;
+width: 42px;
+height: 42px;
+border-radius: 11px;
+color: white;
+font-size: 22px;
+font-weight: 800;
+background: linear-gradient(145deg, #347de0, #153c78);
+}
+.axion-module-brand small, .axion-module-identity > span, .axion-cloud-welcome > span {
+display: block;
+color: #8ea5c5;
+font-size: 10px;
+letter-spacing: .15em;
+font-weight: 700;
+}
+.axion-module-brand strong { display: block; margin-top: 3px; font-size: 21px; letter-spacing: -.04em; }
+.axion-module-brand i { color: #79adff; font-style: normal; font-weight: 500; }
+.axion-home-button {
+border: 1px solid #2a3d59;
+border-radius: 9px;
+padding: 10px 14px;
+color: #d9e6fa;
+background: #111d30;
+cursor: pointer;
+}
+.axion-module-body { display: grid; grid-template-columns: 235px minmax(0, 1fr); min-height: calc(100vh - 79px); }
+.axion-module-identity { padding: 30px 22px; border-right: 1px solid #1c2b42; background: #0a111e; }
+.axion-module-identity h2 { margin: 14px 0 8px; font-size: 21px; }
+.axion-module-identity p, .axion-cloud-welcome p { color: #9babc2; line-height: 1.6; font-size: 13px; }
+.axion-module-content { min-width: 0; padding: clamp(16px, 3vw, 34px); color: #172033; background: #f3f6fb; }
+.axion-cloud-home { padding-bottom: 60px; }
+.axion-cloud-welcome { padding: clamp(38px, 7vw, 82px) clamp(22px, 7vw, 90px) 30px; }
+.axion-cloud-welcome h1 { max-width: 780px; margin: 16px 0 10px; font-size: clamp(30px, 5vw, 54px); letter-spacing: -.055em; line-height: 1.08; }
+.axion-cloud-modules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; padding: 20px clamp(22px, 7vw, 90px); }
+.axion-cloud-module-card { display: flex; flex-direction: column; align-items: flex-start; min-height: 230px; padding: 24px; text-align: left; border: 1px solid #233652; border-radius: 15px; color: #e8eef8; background: linear-gradient(150deg, #111d30, #0c1422); cursor: pointer; transition: border-color .18s, transform .18s; }
+.axion-cloud-module-card:hover { transform: translateY(-3px); border-color: #4d8fe8; }
+.axion-cloud-card-mark { color: #79adff; font-size: 12px; font-weight: 800; letter-spacing: .12em; }
+.axion-cloud-module-card strong { margin-top: 28px; font-size: 22px; }
+.axion-cloud-module-card > span:not(.axion-cloud-card-mark) { margin-top: 9px; color: #9babc2; font-size: 13px; line-height: 1.6; }
+.axion-cloud-module-card b { display: flex; justify-content: space-between; width: 100%; margin-top: auto; padding-top: 25px; color: #8dbaff; font-size: 12px; }
+.axion-cloud-module-card b i { font-style: normal; }
+@media (max-width: 760px) {
+.axion-module-body { grid-template-columns: 1fr; }
+.axion-module-identity { padding: 18px 20px; border-right: 0; border-bottom: 1px solid #1c2b42; }
+.axion-cloud-modules { grid-template-columns: 1fr; }
+.axion-cloud-module-card { min-height: 190px; }
+}
+
+/* AXION — acabamento da identidade principal */
+.analytics-brand .analytics-brand-mark {
+border: 1px solid rgba(105, 163, 255, .42);
+border-radius: 12px;
+background: linear-gradient(145deg, #173c70 0%, #0c1b32 100%);
+color: #eaf2ff;
+box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 5px 18px rgba(0,0,0,.18);
+}
+.analytics-brand h1 {
+display: flex;
+align-items: baseline;
+gap: 7px;
+font-weight: 750;
+letter-spacing: -.045em;
+}
+.axion-brand-systems {
+color: #8eb8ff;
+font-size: .62em;
+font-weight: 500;
+letter-spacing: .015em;
+}
+.analytics-brand small {
+letter-spacing: .13em;
+}
+
+/* AXION — acabamento visual dos espaços de trabalho */
+.axion-workspace-topbar {
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 12px;
+margin: 0 0 12px;
+padding: 10px 14px;
+border: 1px solid var(--border, #dce3ed);
+border-radius: 12px;
+background: var(--surface, #fff);
+}
+.axion-workspace-context {
+color: var(--muted, #697586);
+font-size: 11px;
+font-weight: 800;
+letter-spacing: .1em;
+text-transform: uppercase;
+}
+.axion-workspace-topbar .axion-home-button {
+min-height: 34px;
+padding: 7px 11px;
+border-color: #d6e0ee;
+border-radius: 8px;
+background: #f4f7fc;
+color: #19365d;
+font-size: 12px;
+}
+.axion-workspace-switcher {
+display: flex;
+flex-wrap: wrap;
+gap: 7px;
+margin: 0 0 16px;
+padding: 5px;
+border: 1px solid var(--border, #dce3ed);
+border-radius: 12px;
+background: var(--surface, #fff);
+}
+.axion-workspace-switcher button {
+min-height: 36px;
+padding: 8px 15px;
+border: 1px solid transparent;
+border-radius: 8px;
+background: transparent;
+color: var(--muted, #697586);
+font-size: 12px;
+font-weight: 750;
+cursor: pointer;
+transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.axion-workspace-switcher button:hover {
+border-color: #d4e2f5;
+background: #f3f7fd;
+color: #19365d;
+}
+.axion-workspace-switcher button.active {
+border-color: #254d80;
+background: linear-gradient(135deg, #17365d, #0c1b30);
+color: #fff;
+box-shadow: 0 3px 10px rgba(16, 42, 76, .13);
+}
+.axion-workspace-switcher button:focus-visible,
+.axion-workspace-topbar button:focus-visible {
+outline: 2px solid #5795ef;
+outline-offset: 2px;
+}
+.axion-workspace-topbar + .axion-workspace-switcher + .analytics-nav {
+margin-top: 0;
+}
+.axion-workspace-switcher + .analytics-nav {
+border-bottom-color: #dce4ef;
+}
+.axion-workspace-switcher + .analytics-nav button.active {
+background: #15365e;
+}
+.axion-workspace-switcher + .analytics-view-head {
+margin-top: 6px;
+padding-bottom: 15px;
+border-bottom: 1px solid #dfe6f0;
+}
+@media (max-width: 700px) {
+.axion-workspace-topbar { align-items: flex-start; }
+.axion-workspace-context { align-self: center; text-align: right; }
+.axion-workspace-switcher { display: grid; grid-template-columns: 1fr; }
+.axion-workspace-switcher button { width: 100%; text-align: left; }
+}
+
+/* AXION — integração dos espaços de trabalho */
+.axion-module {
+min-width: 0;
+margin-top: 16px;
+padding: 18px;
+border: 1px solid var(--border, #dce3ed);
+border-radius: 16px;
+background: var(--surface, #fff);
+box-shadow: 0 8px 28px rgba(20, 39, 68, .045);
+}
+.axion-module-header {
+display: flex;
+align-items: center;
+justify-content: space-between;
+gap: 16px;
+padding-bottom: 16px;
+border-bottom: 1px solid var(--border, #dce3ed);
+}
+.axion-module-body {
+display: block;
+min-width: 0;
+padding-top: 16px;
+}
+.axion-module-content {
+min-width: 0;
+width: 100%;
+}
+.axion-module .axion-module-brand {
+display: flex;
+align-items: center;
+gap: 12px;
+}
+.axion-module .axion-module-brand small {
+display: block;
+margin-bottom: 4px;
+color: var(--muted, #697586);
+font-size: 9px;
+letter-spacing: .12em;
+}
+.axion-module .axion-module-brand strong {
+color: var(--text, #17263b);
+font-size: 17px;
+font-weight: 800;
+}
+.axion-module .axion-module-brand strong i {
+color: #5489d4;
+font-style: normal;
+font-weight: 600;
+}
+.axion-module .axion-module-mark {
+display: grid;
+place-items: center;
+width: 40px;
+height: 40px;
+flex: 0 0 40px;
+border: 1px solid rgba(105, 163, 255, .42);
+border-radius: 11px;
+background: linear-gradient(145deg, #173c70, #0c1b32);
+color: #eaf2ff;
+font-weight: 800;
+}
+.axion-module .axion-home-button {
+min-height: 36px;
+padding: 8px 12px;
+border: 1px solid #d6e0ee;
+border-radius: 9px;
+background: #f4f7fc;
+color: #19365d;
+font-size: 12px;
+font-weight: 700;
+cursor: pointer;
+}
+.axion-module .axion-home-button:hover {
+border-color: #8eb8ff;
+background: #eaf2ff;
+}
+@media (max-width: 700px) {
+.axion-module { padding: 12px; }
+.axion-module-header { align-items: flex-start; }
+.axion-module .axion-module-brand small { font-size: 8px; }
+.axion-module .axion-module-brand strong { font-size: 15px; }
+.axion-module .axion-home-button { font-size: 11px; }
+}
