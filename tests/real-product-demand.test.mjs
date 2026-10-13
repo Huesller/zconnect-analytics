@@ -1,14 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import fs from "node:fs";
 
-const frontend = readFileSync(new URL("../src/main.jsx", import.meta.url), "utf8");
-const backend = readFileSync(new URL("../GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", import.meta.url), "utf8");
+const sourceRoot = new URL("../src/", import.meta.url);
+const sourceFiles = fs.readdirSync(sourceRoot, { recursive: true })
+  .filter((file) => /\.(js|jsx|ts|tsx)$/.test(file))
+  .map((file) => ({
+    file,
+    text: fs.readFileSync(new URL(file.replace(/\\/g, "/"), sourceRoot), "utf8")
+  }));
+const frontend = sourceFiles.map((entry) => entry.text).join("\n");
+const backend = fs.readFileSync(new URL("../GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", import.meta.url), "utf8");
 
 test("sugestões de busca não são convertidas em demanda de SKU", () => {
-  const start = frontend.indexOf("function buildDemandStockRows");
-  const end = frontend.indexOf("function buildAlerts", start);
-  const demandSource = frontend.slice(start, end);
+  const demandFile = sourceFiles.find((entry) => entry.text.includes("function buildDemandStockRows"));
+  const demandText = demandFile?.text ?? "";
+  const start = demandText.indexOf("function buildDemandStockRows");
+  const end = demandText.indexOf("function buildAlerts", start);
+  const demandSource = start >= 0 ? demandText.slice(start, end >= 0 ? end : undefined) : "";
   assert.doesNotMatch(demandSource, /matches\.forEach\(\(product\) => touch\(product, "search"/);
   assert.doesNotMatch(demandSource, /touch\(product, "search"/);
   assert.match(demandSource, /event\.event === "product_open"/);

@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import fs from "node:fs";
 import test from "node:test";
 
-const main = readFileSync(new URL("../src/main.jsx", import.meta.url), "utf8");
-const appsScript = readFileSync(new URL("../GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", import.meta.url), "utf8");
-const proxy = readFileSync(new URL("../api/analytics.js", import.meta.url), "utf8");
+const sourceRoot = new URL("../src/", import.meta.url);
+const sourceFiles = fs.readdirSync(sourceRoot, { recursive: true })
+  .filter((file) => /\.(js|jsx|ts|tsx)$/.test(file))
+  .map((file) => ({
+    file,
+    text: fs.readFileSync(new URL(file.replace(/\\/g, "/"), sourceRoot), "utf8")
+  }));
+const main = sourceFiles.map((entry) => entry.text).join("\n");
+const appsScript = fs.readFileSync(new URL("../GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", import.meta.url), "utf8");
+const proxy = fs.readFileSync(new URL("../api/analytics.js", import.meta.url), "utf8");
 
 test("tarefas respondem de forma otimista e preservam histórico por cliente", () => {
   assert.match(main, /LOCAL-TASK-/);

@@ -3,7 +3,12 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const root = new URL("../", import.meta.url);
-const source = await readFile(new URL("src/main.jsx", root), "utf8");
+const source = (await Promise.all([
+  "src/main.jsx",
+  "src/modules/crm/CommercialReportsView.jsx",
+  "src/modules/crm/CrmNotesCenterView.jsx",
+  "src/modules/crm/components/ClientCrmTable.jsx"
+].map((file) => readFile(new URL(file, root), "utf8")))).join("\n");
 const appsScript = await readFile(new URL("GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", root), "utf8");
 
 test("tags comerciais são fixas, múltiplas e filtráveis", () => {
@@ -27,7 +32,7 @@ test("cliente pode sair do funil sem ser excluído", () => {
 });
 
 test("relatório consolida ocorrências e recorrências por cliente", () => {
-  assert.match(source, /function CommercialReports/);
+  assert.match(source, /function CommercialReports(?:View)?\(/);
   assert.match(source, /Recorrências/);
   assert.match(source, /Por cliente/);
   assert.match(source, /Exportar Excel/);

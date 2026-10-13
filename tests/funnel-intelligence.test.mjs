@@ -2,7 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const main = fs.readFileSync(new URL("../src/main.jsx", import.meta.url), "utf8");
+const sourceRoot = new URL("../src/", import.meta.url);
+const sourceFiles = fs.readdirSync(sourceRoot, { recursive: true })
+  .filter((file) => /\.(js|jsx|ts|tsx)$/.test(file))
+  .map((file) => ({
+    file,
+    text: fs.readFileSync(new URL(file.replace(/\\/g, "/"), sourceRoot), "utf8")
+  }));
+const main = sourceFiles.map((entry) => entry.text).join("\n");
 const appsScript = fs.readFileSync(new URL("../GOOGLE_APPS_SCRIPT_V3_CLIENTES.js", import.meta.url), "utf8");
 
 test("funil contém os oito marcos comerciais", () => {
@@ -31,7 +38,9 @@ test("tarefas comerciais possuem atalhos e opção livre", () => {
 test("Cliente 360 protege alterações locais durante sincronização", () => {
   assert.match(main, /mergeLocalCrmRows/);
   assert.match(main, /clientModalOpenRef/);
-  assert.match(main, /if \(!clientModalOpenRef\.current\) load\(\{ silent: true \}\)/);
+  const refresh = fs.readFileSync(new URL("../src/core/app/useAppRefresh.js", import.meta.url), "utf8");
+  assert.match(refresh, /if \(!clientModalOpenRef\.current\)/);
+  assert.match(refresh, /load\(\{ silent: true \}\)/);
 });
 
 test("Cliente 360 inicializa interesses antes de calcular os totais do modal", () => {
